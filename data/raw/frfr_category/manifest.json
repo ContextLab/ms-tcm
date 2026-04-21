@@ -1,0 +1,42 @@
+{
+  "created_at": "2026-04-21T16:16:27.324934+00:00",
+  "design": {
+    "early_lists": "list < 8 (sorted by category)",
+    "late_lists": "list >= 8 (random order)",
+    "lists_per_participant": 16,
+    "participants": 30,
+    "unique_categories_per_list": 4,
+    "unique_categories_total": 15,
+    "words_per_list": 16
+  },
+  "files": {
+    "presented.csv": {
+      "sha256": "d9dbb785d5512fd632155c6f11ae78125ecdfec86f0f54b7820f3761d35f2509",
+      "size_bytes": 669936
+    },
+    "presented.parquet": {
+      "sha256": "86edfd000e422961a6c235f7444eca77dab8a955214a71cc2b823bcdc6087c98",
+      "size_bytes": 193716
+    },
+    "recalled.csv": {
+      "sha256": "0e0173147020dd3d7941a077e506fe94c4b9364b6a0b2aea4d92cd01440f88f9",
+      "size_bytes": 163608
+    },
+    "recalled.parquet": {
+      "sha256": "74125db53d73cf0beb5976fe7d7fb1c9751ea7655651646e7e70e3b022f3f064",
+      "size_bytes": 21491
+    }
+  },
+  "row_counts": {
+    "presented": 7680,
+    "recalled_extra_list_intrusions": 399,
+    "recalled_in_list": 4816,
+    "recalled_total": 5215
+  },
+  "source": {
+    "condition": "category (exp2)",
+    "egg_sha256": "19e06161b3e1296f10b2c21b5a5ed5357fefd3e3b65560849c671e6e50f21b08",
+    "egg_url": "https://www.dropbox.com/s/kliq92lta7mvqcc/exp2.egg?dl=1",
+    "paper": "Manning et al. 2023 (https://github.com/ContextLab/FRFR-analyses)"
+  }
+}

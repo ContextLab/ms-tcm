@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/Users/jmanning/ms-tcm/.specify/extensions/git/scripts/bash/create-new-feature.sh --json --short-name \"ms-tcm-impl\" \"Implement MS-TCM model with data format and synthetic dataset\")",
+      "Bash(/Users/jmanning/ms-tcm/.specify/scripts/bash/check-prerequisites.sh --json --paths-only)",
+      "Bash(/Users/jmanning/ms-tcm/.specify/scripts/bash/setup-plan.sh --json)",
+      "Read(//Users/jmanning/Desktop/**)",
+      "Bash(.venv/bin/ms-tcm fit *)",
+      "Bash(PYTHONPATH=. .venv/bin/python code/figures/make_fig_model.py)",
+      "Bash(PYTHONPATH=. .venv/bin/python code/figures/make_fig_experiment.py)",
+      "Bash(PYTHONPATH=. .venv/bin/python code/figures/make_fig_model.py --force-rerun)"
+    ]
+  }
+}

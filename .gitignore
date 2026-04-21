@@ -130,6 +130,15 @@ dmypy.json
 
 .DS_Store
 
+# ms-tcm project-specific
+data/processed/fits/
+data/processed/embeddings/
+data/raw/frfr_category/exp2.egg.cache
+
+# local agent / session state (not shared)
+.omc/
+.claude/scheduled_tasks.lock
+
 # latex "junk" files
 *.cb*
 *.dvi

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ms_tcm"
+version = "0.1.0.dev0"
+description = "Multi-Stream Temporal Context Model (MS-TCM): implementation + FRFR-category worked example + MLE/CI fitter"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Contextual Dynamics Lab" },
+]
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "pyarrow>=14",
+    "pandas>=2.1",
+    "h5py>=3.10",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "pytest-cov>=4",
+]
+
+[project.scripts]
+ms-tcm = "ms_tcm.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["code"]
+include = ["ms_tcm*"]
+
+[tool.pytest.ini_options]
+testpaths = ["code/tests"]
+addopts = "--strict-markers -q"
+markers = [
+    "slow: marks tests that take more than a few seconds (bootstrap/parameter-recovery)",
+]
