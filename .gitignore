@@ -148,3 +148,4 @@ data/raw/frfr_category/exp2.egg.cache
 *.fff
 *.synctex.gz
 *.bbl
+*.out

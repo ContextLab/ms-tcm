@@ -58,7 +58,23 @@ A regression test at
 asserts $P(\text{recall}) > 0.3$ for the last three serial positions and
 an intrusion rate below $5\%$, so any future off-by-one would fail CI.
 
-\section*{S2. \S4.4 rounding cascade}
+\section*{S2. Likelihood-surface flatness on small synthetic data}
+
+At FRFR-scale real data the MS-TCM likelihood surface is informative
+(grid scan over $(\beta_G, w_G)$ gives a range of $\sim 100$ nats across the
+parameter simplex, vs a uniform-recall baseline $\sim 1200$ nats below the
+MLE). At the smaller scales used for quick sanity checks, the same grid
+scan shows an essentially flat surface (LL varies by $\sim 2$ nats around a
+uniform baseline of $\sim -1064$ nats). The practical consequence is that
+the parameter-recovery test at
+\texttt{code/tests/test\_parameter\_recovery.py} needs a synthetic dataset
+at FRFR scale ($30$ pt $\times$ $16$ lists $\times$ $16$ words $\times$ $4$
+categories $\approx 7{,}680$ recalls) before the L-BFGS-B optimizer can
+reliably recover the true parameter vector; smaller datasets converge to
+whatever corner the initial point leans toward. This is a property of the
+likelihood surface, not a bug in the fitter.
+
+\section*{S3. \S4.4 rounding cascade}
 
 The model specification \texttt{notes/ms-tcm.pdf} \S4.4 reports the bridge-
 condition composite similarity as $0.806$ at $\beta_G = \beta_S = 0.5$,
