@@ -204,21 +204,11 @@ def draw() -> plt.Figure:
             ax, x, braid_y, tick_w, braid_h,
             color=colour, edgecolor="#334155", lw=0.4,
         )
-        # Thin guide line back up to the strand segment in panel (A).
-        src_ticks = clocks[k]
-        idx = src_ticks.index(t)
-        src_x0 = panel_a_left + (idx / len(src_ticks)) * (panel_a_right - panel_a_left)
-        src_x1 = panel_a_left + ((idx + 1) / len(src_ticks)) * (panel_a_right - panel_a_left)
-        src_mid = (src_x0 + src_x1) / 2
-        src_y = strand_ys[k]
-        arc = FancyArrowPatch(
-            (src_mid, src_y),
-            (x + tick_w / 2, braid_y + braid_h),
-            connectionstyle="arc3,rad=-0.25",
-            arrowstyle="-", color=STORY_COLOURS[k][1], lw=0.45, alpha=0.25,
-            zorder=1,
-        )
-        ax.add_patch(arc)
+        # (No explicit strand-to-braid guide arcs: the colour + lightness of
+        # each braid segment already identifies its storyline of origin and
+        # its position along that storyline's internal clock. Earlier
+        # iterations drew thin arcs but they cluttered the region between
+        # panels A and B without adding information.)
 
     # Viewer-timeline axis under the braid.
     ax.annotate(
