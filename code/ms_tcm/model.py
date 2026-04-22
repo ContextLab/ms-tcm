@@ -160,6 +160,7 @@ class MSTCMModel:
     def _score_against_candidates(
         self, c_ret: np.ndarray, state: EncodingState,
         participant: int, list_: int,
+        cue_serial_position: int,
     ) -> np.ndarray:
         p = self.parameters
         key = (participant, list_)
@@ -179,15 +180,32 @@ class MSTCMModel:
             sims = np.where(cand_norms == 0.0, 0.0, sims)
 
         if p.lambda_interference != 0.0:
-            # No interference model wired up per-transition yet; factor is 1.
-            pass
+            # §5.3: unnormalized score = sim · exp(-λ · I_{ij}).
+            # For free recall we instantiate I_{ij} as the count of items
+            # encoded between candidate i (at serial position s_i) and the
+            # cue event j (at serial position cue_serial_position): i.e.
+            # max(0, |s_i - s_j| - 1). This is the release-from-proactive-
+            # interference interpretation in notes/ms-tcm.pdf §5.3 — more
+            # intervening items ⇒ more interference ⇒ smaller factor.
+            W = candidates.shape[0]
+            serial_positions = np.arange(1, W + 1, dtype=np.float64)
+            gap = np.abs(serial_positions - float(cue_serial_position))
+            i_ij = np.maximum(gap - 1.0, 0.0)
+            factor = np.exp(-float(p.lambda_interference) * i_ij)
+            sims = sims * factor
         return recall_probabilities(sims)
 
     def score_first_recall(
         self, state: EncodingState, participant: int, list_: int,
     ) -> np.ndarray:
+        key = (participant, list_)
+        W = state.c_composite[key].shape[0]
         c_ret = self._retrieval_context_end_of_list(state, participant, list_)
-        return self._score_against_candidates(c_ret, state, participant, list_)
+        # First recall is cued by the end-of-list context; take j = W (last
+        # encoded position) so I_{ij} measures distance back into the list.
+        return self._score_against_candidates(
+            c_ret, state, participant, list_, cue_serial_position=W,
+        )
 
     def score_next_recall(
         self, state: EncodingState, participant: int, list_: int,
@@ -201,7 +219,10 @@ class MSTCMModel:
         c_ret = self._retrieval_context_after(
             state, participant, list_, last_recalled_serial_position,
         )
-        return self._score_against_candidates(c_ret, state, participant, list_)
+        return self._score_against_candidates(
+            c_ret, state, participant, list_,
+            cue_serial_position=last_recalled_serial_position,
+        )
 
 
 def sample_recalls(

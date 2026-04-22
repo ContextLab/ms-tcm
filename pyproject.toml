@@ -35,7 +35,9 @@ include = ["ms_tcm*"]
 
 [tool.pytest.ini_options]
 testpaths = ["code/tests"]
-addopts = "--strict-markers -q"
+# Fast CI default excludes `slow` tests. To run the full suite (including the
+# multi-minute parameter-recovery test) pass `-m "slow or not slow"`.
+addopts = "--strict-markers -q -m 'not slow'"
 markers = [
     "slow: marks tests that take more than a few seconds (bootstrap/parameter-recovery)",
 ]

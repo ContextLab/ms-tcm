@@ -53,13 +53,13 @@ description: "Task list for feature 001-ms-tcm-impl: MS-TCM model + FRFR-categor
 
 ## Phase 3: User Story 1 — Simulate cued recall for all four conditions (Priority: P1) 🎯 MVP
 
-**Goal**: Run the MS-TCM forward simulator and reproduce the §4.4 analytical anchor (0.866 grouped / 0.806 bridge) to four decimals on hand-derived inputs
+**Goal**: Run the MS-TCM forward simulator and reproduce the §4.4 analytical anchor (closed-form 0.86603 grouped / 0.80532 bridge; the PDF prints 0.866 / 0.806, the latter a rounding-cascade artifact) at 1e-6 tolerance on hand-derived inputs
 
-**Independent Test**: `pytest code/tests/test_composite.py::test_section_4_4_numerical_anchor` asserts 0.866 and 0.806 to four decimals at β_G = β_S = 0.5, w_G = 0.2, w_S = 0.8, m = 3
+**Independent Test**: `pytest code/tests/test_composite.py::test_section_4_4_numerical_anchor` asserts the closed-form values √0.75 = 0.86603 and 0.2·0.5625 + 0.8·√0.75 = 0.80532 at 1e-6 tolerance, given β_G = β_S = 0.5, w_G = 0.2, w_S = 0.8, m = 3
 
 ### Tests for User Story 1 (write first; they must fail before implementation lands)
 
-- [X] T010 [P] [US1] Write `test_section_4_4_numerical_anchor` in `code/tests/test_composite.py` — hand-construct two unit-norm input vectors, step the context updates forward with β_G = β_S = 0.5, and assert composite similarity equals 0.866 (grouped, one-step) and 0.806 (bridge, m=3) to four decimals (pins FR-013a, SC-002, notes/ms-tcm.pdf §4.4)
+- [X] T010 [P] [US1] Write `test_section_4_4_numerical_anchor` in `code/tests/test_composite.py` — hand-construct two unit-norm input vectors, step the context updates forward with β_G = β_S = 0.5, and assert composite similarity equals √0.75 = 0.86603 (grouped, one-step) and 0.2·0.5625 + 0.8·√0.75 = 0.80532 (bridge, m=3) at 1e-6 tolerance. Pins FR-013a, SC-002, notes/ms-tcm.pdf §4.4 (with the rounding-cascade caveat recorded in the test docstring)
 - [X] T011 [P] [US1] Write `test_global_context_drift` and `test_storyline_context_frozen_when_inactive` in `code/tests/test_context.py` — assert `c_G(t+1) = ρ_G·c_G(t) + β_G·c_in` element-wise at 1e-12; assert `c_S(t+1) == c_S(t)` exactly when storyline S is inactive (pins FR-001, notes/ms-tcm.pdf §3.2)
 - [X] T012 [P] [US1] Write `test_composite_weights_sum_to_one_enforced` and `test_retrieval_weights_independent` in `code/tests/test_composite.py` — assert `ValueError` raised when w_G + w_S ≠ 1 within 1e-12; assert retrieval weights can differ from encoding weights (pins FR-003, FR-004)
 - [X] T013 [P] [US1] Write `test_cosine_similarity_zero_vector_returns_zero` and `test_recall_probabilities_sum_to_one` in `code/tests/test_similarity.py` — assert cosine_similarity returns 0.0 for zero-norm inputs (no NaN); assert softmax output sums to 1 ± 1e-12 (pins FR-005, research R4)

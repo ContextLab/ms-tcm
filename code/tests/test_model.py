@@ -131,3 +131,48 @@ def test_standard_tcm_mode_disables_storyline_contribution() -> None:
         c_comp = state.c_composite[key]      # shape (W, d)
         c_g = state.c_global[key][1:]        # shape (W, d)
         np.testing.assert_allclose(c_comp, c_g, atol=1e-12)
+
+
+def test_lambda_interference_factor_is_applied() -> None:
+    """§5.3: with λ > 0 the candidate score for a candidate at gap g from the
+    cue is multiplied by exp(-λ · max(g-1, 0)).
+
+    This pins the implementation at model.py:_score_against_candidates so that
+    enabling λ actually changes the per-candidate ranking (not just the config
+    flag). At λ = 0 (the default) the factor is identically 1 and the two
+    probability vectors must match bit-for-bit.
+    """
+    ds = _minimal_dataset([["CAT", "DOG", "BAR", "BOX"]])
+
+    # Baseline (λ = 0): pure cosine scoring.
+    base = MSTCMModel(ModelParameters(
+        beta_global=0.5, beta_storyline=0.5,
+        w_global=0.4, w_storyline=0.6,
+    ))
+    # With λ = 0.5 and j = last-recalled-position = 1, candidates farther from
+    # position 1 should be down-weighted relative to baseline.
+    biased = MSTCMModel(ModelParameters(
+        beta_global=0.5, beta_storyline=0.5,
+        w_global=0.4, w_storyline=0.6,
+        lambda_interference=0.5,
+    ))
+    state_base = base.encode(ds)
+    state_biased = biased.encode(ds)
+
+    probs_base = base.score_next_recall(state_base, 0, 0, last_recalled_serial_position=1)
+    probs_biased = biased.score_next_recall(state_biased, 0, 0, last_recalled_serial_position=1)
+
+    # Outputs are non-degenerate and sum to 1.
+    np.testing.assert_allclose(probs_base.sum(), 1.0, atol=1e-12)
+    np.testing.assert_allclose(probs_biased.sum(), 1.0, atol=1e-12)
+
+    # The far candidate (serial_position = 4, gap = 3) must lose relative mass
+    # under λ = 0.5 compared to the baseline, and the near candidate
+    # (serial_position = 2, gap = 1, I_{ij} = 0) must gain relative mass.
+    # Relative mass = probs_biased[i] / probs_base[i].
+    ratio_near = probs_biased[1] / probs_base[1]   # serial_position 2, gap = 1
+    ratio_far  = probs_biased[3] / probs_base[3]   # serial_position 4, gap = 3
+    assert ratio_near > ratio_far, (
+        f"λ-interference must down-weight distant candidates: "
+        f"ratio_near={ratio_near!r}, ratio_far={ratio_far!r}"
+    )
