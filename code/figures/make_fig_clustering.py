@@ -13,9 +13,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from ms_tcm import load_frfr_category
-from code.analyses import clustering
-from code.analyses.embeddings import load_embeddings
-from code.analyses.predicted import (
+
+# Figure scripts live under code/figures/ and import sibling helpers under
+# code/analyses/. Put code/ on sys.path so the `analyses` package is
+# importable without requiring code/ to be a Python package itself.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from analyses import clustering  # noqa: E402
+from analyses.embeddings import load_embeddings  # noqa: E402
+from analyses.predicted import (  # noqa: E402
     compute_scalar_band, draw_synthetic_datasets, params_from_fit_summary,
 )
 

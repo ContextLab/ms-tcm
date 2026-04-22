@@ -16,8 +16,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from ms_tcm import Dataset, load_frfr_category
-from code.analyses import lag_crp, pfr, serial_position
-from code.analyses.predicted import (
+
+# Figure scripts live under code/figures/ and import sibling helpers under
+# code/analyses/. Put code/ on sys.path so the `analyses` package is
+# importable without requiring code/ to be a Python package itself.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from analyses import lag_crp, pfr, serial_position  # noqa: E402
+from analyses.predicted import (  # noqa: E402
     compute_band, draw_synthetic_datasets, params_from_fit_summary,
 )
 

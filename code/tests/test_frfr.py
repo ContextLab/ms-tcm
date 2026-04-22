@@ -80,3 +80,52 @@ def test_manifest_hashes_match_file_contents_after_roundtrip(tmp_path: Path) -> 
     # Validate the rewritten copy.
     report = validate_dataset(tmp_path / "copy")
     assert report.ok, report.summary()
+
+
+def test_recall_serial_position_shape() -> None:
+    """Regression guard: the recall serial-position histogram shows standard
+    primacy + recency on the FRFR-category data.
+
+    This test catches a real data bug that shipped in commit 8684fa0: the
+    reformat script used ``sp = int(temporal)`` against upstream's 0-indexed
+    ``temporal`` field, so SP=16 was silently dropped (the last word of every
+    list was recoded as an intrusion) and every other SP was shifted down by
+    one. The fix (scripts/reformat_frfr_category.py) is ``sp = temporal + 1``.
+    This test pins the corrected shape so the bug cannot reappear silently.
+
+    Thresholds are chosen generously (far from the bug's signature, which had
+    SP=16 at 0.008) while still catching any future off-by-one.
+    """
+    ds = load_frfr_category()
+    rdf = ds.recalled.to_pandas()
+    pdf = ds.presented.to_pandas()
+    total_lists = pdf[["participant", "list"]].drop_duplicates().shape[0]
+
+    # P(recall) per serial position: fraction of lists where SP was recalled.
+    sp_counts = (
+        rdf[rdf["serial_position"] > 0]
+        .drop_duplicates(subset=["participant", "list", "serial_position"])
+        .groupby("serial_position").size()
+    )
+
+    # The last few positions must all have substantial recall probability
+    # (the bug had SP=16 at 0.008; correct value is ~0.67).
+    for sp in (14, 15, 16):
+        p_rec = sp_counts.get(sp, 0) / total_lists
+        assert p_rec > 0.3, (
+            f"SP={sp} P(recall) = {p_rec:.3f} is suspiciously low "
+            f"(the reformat off-by-one bug put SP=16 at 0.008)"
+        )
+
+    # And the first positions (primacy) should also be high.
+    for sp in (1, 2):
+        p_rec = sp_counts.get(sp, 0) / total_lists
+        assert p_rec > 0.5, f"SP={sp} P(recall) = {p_rec:.3f} below 0.5"
+
+    # Intrusions should be a small minority of all recalls.
+    total = len(rdf)
+    n_intrusions = (rdf["serial_position"] == 0).sum()
+    assert n_intrusions / total < 0.05, (
+        f"intrusion rate {n_intrusions}/{total} = {n_intrusions/total:.2%} "
+        f"is implausibly high (the reformat bug produced 399/5215 = 7.7%)"
+    )

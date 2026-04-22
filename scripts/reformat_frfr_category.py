@@ -93,14 +93,24 @@ def extract(egg_path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
                     item = _decode(a.get("item", b""))
                     if item is None or (isinstance(item, float) and item != item):
                         continue
-                    tmp = a.get("temporal", 0)
-                    # temporal values outside [1, 16] (the list width) are
-                    # treated as extra-list intrusions (serial_position = 0).
-                    # A handful of participant-21 recalls have temporal > 16
-                    # in the upstream egg; those are not valid list items.
-                    sp = int(tmp) if tmp else 0
-                    if not (1 <= sp <= 16):
+                    tmp = a.get("temporal", None)
+                    # Upstream convention (verified empirically by decoding the
+                    # exp2.egg and cross-referencing recalled items against the
+                    # presented table word-by-word): ``temporal`` is 0-indexed
+                    # against the item index ``i{k}`` in the presented group,
+                    # so temporal == 0 is the FIRST word of the list, and
+                    # temporal == 15 is the LAST word of a 16-word list. We
+                    # convert to our 1-indexed serial_position with +1. Values
+                    # outside [0, 15] are extra-list intrusions (serial_position
+                    # = 0 in our canonical format).
+                    if tmp is None:
                         sp = 0
+                    else:
+                        try:
+                            t = int(tmp)
+                        except (TypeError, ValueError):
+                            t = -1
+                        sp = t + 1 if 0 <= t <= 15 else 0
                     recalled.append(
                         {
                             "participant": p,

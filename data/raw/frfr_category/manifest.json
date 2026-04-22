@@ -1,5 +1,5 @@
 {
-  "created_at": "2026-04-21T16:16:27.324934+00:00",
+  "created_at": "2026-04-22T02:35:36.670308+00:00",
   "design": {
     "early_lists": "list < 8 (sorted by category)",
     "late_lists": "list >= 8 (random order)",
@@ -19,18 +19,18 @@
       "size_bytes": 193716
     },
     "recalled.csv": {
-      "sha256": "0e0173147020dd3d7941a077e506fe94c4b9364b6a0b2aea4d92cd01440f88f9",
-      "size_bytes": 163608
+      "sha256": "4f6e1a0465adf25e575e53c0626c455d768b1885f96d3f84ca323a255e61163e",
+      "size_bytes": 163888
     },
     "recalled.parquet": {
-      "sha256": "74125db53d73cf0beb5976fe7d7fb1c9751ea7655651646e7e70e3b022f3f064",
-      "size_bytes": 21491
+      "sha256": "91af17f2f76afbae6e7605ba1f3a847bd38ebf3a65e73155d468835d2c0abdad",
+      "size_bytes": 21486
     }
   },
   "row_counts": {
     "presented": 7680,
-    "recalled_extra_list_intrusions": 399,
-    "recalled_in_list": 4816,
+    "recalled_extra_list_intrusions": 10,
+    "recalled_in_list": 5205,
     "recalled_total": 5215
   },
   "source": {

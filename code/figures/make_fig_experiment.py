@@ -39,9 +39,22 @@ def _draw_row(ax, y: float, list_label: str, order: list[str], words: list[str])
         ax.text(i * 0.9 + 0.425, y + 0.35, w,
                 ha="center", va="center", fontsize=6.5, color="white",
                 fontweight="bold")
-    # microphone marker
-    ax.text(len(order) * 0.9 + 0.4, y + 0.35, r"$\bullet$ recall",
-            ha="left", va="center", fontsize=8, style="italic")
+    # A small recall-phase indicator (the FRFR task asks for free recall at
+    # the end of every list; we draw it as an arrow into a labeled box).
+    x_arrow_from = len(order) * 0.9 + 0.05
+    x_arrow_to = x_arrow_from + 0.55
+    ax.annotate(
+        "", xy=(x_arrow_to, y + 0.35), xytext=(x_arrow_from, y + 0.35),
+        arrowprops=dict(arrowstyle="->", color="black", lw=0.8),
+    )
+    recall_box = mpatches.FancyBboxPatch(
+        (x_arrow_to, y), 1.4, 0.7,
+        boxstyle="round,pad=0.05",
+        linewidth=0.6, edgecolor="black", facecolor="#f3f4f6",
+    )
+    ax.add_patch(recall_box)
+    ax.text(x_arrow_to + 0.7, y + 0.35, "free recall",
+            ha="center", va="center", fontsize=7.5, style="italic")
 
 
 def draw() -> plt.Figure:
@@ -69,7 +82,7 @@ def draw() -> plt.Figure:
     _draw_row(ax, 1.2, r"Early list (sorted)", early_order, early_words)
     _draw_row(ax, 0.2, r"Late list (random)", late_order, late_words)
 
-    ax.set_xlim(-2.5, 15.5)
+    ax.set_xlim(-2.5, 17.3)
     ax.set_ylim(-0.3, 2.3)
     ax.axis("off")
 
