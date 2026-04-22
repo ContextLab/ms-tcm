@@ -161,6 +161,7 @@ class MSTCMModel:
         self, c_ret: np.ndarray, state: EncodingState,
         participant: int, list_: int,
         cue_serial_position: int,
+        recalled_sps: set[int] | None = None,
     ) -> np.ndarray:
         p = self.parameters
         key = (participant, list_)
@@ -203,7 +204,28 @@ class MSTCMModel:
             positions = np.arange(W, dtype=np.float64)  # 0-indexed so i=1 -> 0
             primacy = float(p.phi_s) * np.exp(-float(p.phi_d) * positions) + 1.0
             sims = sims * primacy
-        return recall_probabilities(sims, tau=p.tau)
+        # Exclude already-recalled items from the candidate set: in free
+        # recall, participants almost never repeat. The spec data-model.md
+        # §4.2 note 1 originally kept repeats as "consuming their own mass",
+        # but that makes the model predict repeats with near-certainty (the
+        # self-similarity is 1 which dominates the softmax); the likelihood
+        # of observed non-repeating sequences is then catastrophically low.
+        # Masking out recalled positions (setting them to -inf pre-softmax)
+        # is the standard TCM / CMR convention.
+        probs = recall_probabilities(sims, tau=p.tau)
+        if recalled_sps:
+            mask = np.ones_like(probs, dtype=bool)
+            for sp in recalled_sps:
+                idx = int(sp) - 1
+                if 0 <= idx < probs.shape[0]:
+                    mask[idx] = False
+            remaining = probs * mask
+            total = remaining.sum()
+            if total > 0:
+                probs = remaining / total
+            # else: all candidates recalled; fall through with the (unmasked)
+            # probs as a degenerate tail.
+        return probs
 
     def score_first_recall(
         self, state: EncodingState, participant: int, list_: int,
@@ -215,23 +237,37 @@ class MSTCMModel:
         # encoded position) so I_{ij} measures distance back into the list.
         return self._score_against_candidates(
             c_ret, state, participant, list_, cue_serial_position=W,
+            recalled_sps=None,
         )
 
     def score_next_recall(
         self, state: EncodingState, participant: int, list_: int,
         last_recalled_serial_position: int,
+        recalled_sps: set[int] | None = None,
     ) -> np.ndarray:
+        """Score candidates for the next recall given the previous recall.
+
+        ``recalled_sps`` is the set of serial positions already recalled on
+        this list (including the most recent one); candidates in that set are
+        masked to zero before re-normalising. This enforces the standard TCM
+        "no-repeats" candidate-set convention. If ``recalled_sps`` is None
+        we default to masking only the just-recalled position (equivalent to
+        a strict Markovian "don't repeat the last word" rule).
+        """
         if last_recalled_serial_position < 1:
             raise ValueError(
                 f"last_recalled_serial_position must be 1-based positive; "
                 f"got {last_recalled_serial_position!r}"
             )
+        if recalled_sps is None:
+            recalled_sps = {int(last_recalled_serial_position)}
         c_ret = self._retrieval_context_after(
             state, participant, list_, last_recalled_serial_position,
         )
         return self._score_against_candidates(
             c_ret, state, participant, list_,
             cue_serial_position=last_recalled_serial_position,
+            recalled_sps=recalled_sps,
         )
 
 
@@ -261,6 +297,7 @@ def sample_recalls(
         first_probs = model.score_first_recall(state, int(part), int(lst))
         pick = int(rng.choice(W, p=first_probs))
         picked_sp = int(sub.iloc[pick]["serial_position"])
+        recalled_sps: set[int] = {picked_sp}
         list_group = "early" if int(lst) < 8 else "late"
         rows.append({
             "participant": int(part),
@@ -273,11 +310,16 @@ def sample_recalls(
         })
 
         for out_pos in range(2, R + 1):
+            # If every candidate has already been recalled, stop this list.
+            if len(recalled_sps) >= W:
+                break
             next_probs = model.score_next_recall(
                 state, int(part), int(lst), picked_sp,
+                recalled_sps=recalled_sps,
             )
             pick = int(rng.choice(W, p=next_probs))
             picked_sp = int(sub.iloc[pick]["serial_position"])
+            recalled_sps.add(picked_sp)
             rows.append({
                 "participant": int(part),
                 "list": int(lst),

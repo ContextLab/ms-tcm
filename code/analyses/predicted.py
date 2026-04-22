@@ -45,14 +45,32 @@ def draw_synthetic_datasets(
     dataset: Dataset, parameters: ModelParameters,
     n_draws: int, rng_seed: int,
 ) -> list[Dataset]:
-    """Return ``n_draws`` synthetic datasets (same presented sequences, new recalls)."""
+    """Return ``n_draws`` synthetic datasets (same presented sequences, new recalls).
+
+    Recall length per synthetic list is set to match the observed dataset's
+    mean in-list recall length per (participant, list) pair, rounded to the
+    nearest integer. Without this, the model samples W recalls per list (all
+    items recalled exactly once under the no-repeats mask), which inflates
+    the serial-position curve to a flat 1.0 and erases the primacy/recency
+    shape.
+    """
+    rdf = dataset.recalled.to_pandas()
+    in_list = rdf[rdf["serial_position"] > 0]
+    mean_recall_len = int(round(
+        in_list.groupby(["participant", "list"]).size().mean()
+    )) if len(in_list) else dataset.num_words_per_list
+    W = dataset.num_words_per_list
+    capped_len = max(1, min(mean_recall_len, W))
     model = MSTCMModel(parameters)
     master = np.random.SeedSequence(rng_seed)
     children = master.spawn(n_draws)
     out: list[Dataset] = []
     for child in children:
         rng = np.random.default_rng(child)
-        synth_rec = sample_recalls(model, dataset, rng)
+        synth_rec = sample_recalls(
+            model, dataset, rng,
+            recall_length_fn=lambda _W, _n=capped_len: _n,
+        )
         out.append(Dataset(
             presented=dataset.presented, recalled=synth_rec,
             manifest=dict(dataset.manifest),

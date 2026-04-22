@@ -42,15 +42,25 @@ def list_log_likelihood(
     model = MSTCMModel(parameters)
     total = 0.0
     prev_sp: int | None = None
+    recalled_sps: set[int] = set()
     for _, row in rec_df.sort_values("output_position").iterrows():
         sp = int(row["serial_position"])
         if sp == 0:
             continue  # extra-list intrusion; skip
+        if sp in recalled_sps:
+            # Observed repeat: the model (with the no-repeats candidate-set
+            # convention) assigns zero probability. Rather than logging -inf
+            # and aborting the whole dataset likelihood, skip the observed
+            # repeat -- real free-recall data have <~1% repeats and treating
+            # each as an infeasible draw would poison the MLE.
+            prev_sp = sp
+            continue
         if prev_sp is None:
             probs = model.score_first_recall(encoding_state, participant, list_)
         else:
             probs = model.score_next_recall(
                 encoding_state, participant, list_, prev_sp,
+                recalled_sps=recalled_sps,
             )
         # sp is 1-based; presented candidates are 0..W-1 in serial-position order.
         idx = sp - 1
@@ -62,6 +72,7 @@ def list_log_likelihood(
             return float("-inf")
         total += float(np.log(p))
         prev_sp = sp
+        recalled_sps.add(sp)
     return total
 
 
