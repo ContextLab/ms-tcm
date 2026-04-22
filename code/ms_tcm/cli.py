@@ -75,6 +75,14 @@ def _cmd_fit(args: argparse.Namespace) -> int:
 
     dataset = load_dataset(dataset_dir)
 
+    if getattr(args, "alpha", False):
+        print(
+            "error: --alpha (§5.2 conversational references) requires an edge "
+            "table and is not supported for free-recall datasets.",
+            file=sys.stderr,
+        )
+        return 1
+
     optional: dict[str, bool] = {}
     if args.gamma:
         optional["gamma"] = True
@@ -125,7 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # fit
     f = subparsers.add_parser(
-        "fit", help="Fit MS-TCM (or standard TCM) with 95% bootstrap CIs.",
+        "fit", help="Fit MS-TCM (or standard TCM) with 95%% bootstrap CIs.",
     )
     f.add_argument("dataset_dir", help="Path to the dataset directory.")
     f.add_argument("--out", required=True, help="Output directory for fit artifacts.")
@@ -137,6 +145,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Constrain w_storyline=0 for the TCM baseline.")
     f.add_argument("--gamma", action="store_true",
                    help="Enable Section-5.1 resumption reinstatement.")
+    f.add_argument("--alpha", action="store_true",
+                   help="Enable Section-5.2 conversational references. "
+                        "Requires an edge table; not supported for free-recall "
+                        "datasets like FRFR-category -- raises NotImplementedError.")
     f.add_argument("--lambda", dest="lambda_interference", action="store_true",
                    help="Enable Section-5.3 differential interference.")
     f.add_argument("--separate-retrieval-weights", action="store_true",
