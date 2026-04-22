@@ -126,7 +126,7 @@ def main() -> int:
     fig.tight_layout()
     fig.savefig(out, bbox_inches="tight", transparent=True)
     fig.savefig(out.with_suffix(".png"), bbox_inches="tight",
-                transparent=False, dpi=200)
+                transparent=False, dpi=96)
     print(f"Wrote {out}")
 
     # Tiny cache marker so idempotent check works.
