@@ -552,37 +552,25 @@ to the likelihood; empty recall sequences contribute zero.
 \paragraph{Optimizer and confidence intervals.}
 The constrained parameters $\beta_G, \beta_S \in (0,1)$ and
 $w_G \in (0,1)$ are reparameterized via sigmoid transforms onto an
-unconstrained vector, and optimized by L-BFGS-B with two restarts
-from seeded random initial points. Confidence intervals come from
-a participant-level percentile bootstrap ($n_{\mathrm{boot}} = 20$,
-all converged). Two models are fit: MS-TCM (all parameters free) and
-standard TCM (constrained to $w_S = 0$, so the storyline stream is
-inert). Both fits use identical seeds, feature encoders, and
-dataset ($7{,}680$ encoded events, $5{,}205$ in-list recalls, $10$
-extra-list intrusions).
+unconstrained vector, and the strictly-positive parameters ($\tau$,
+$\phi_s$, $\phi_d$) via softplus. The optimizer is L-BFGS-B with two
+restarts from seeded random initial points. Confidence intervals come
+from a participant-level percentile bootstrap ($n_{\mathrm{boot}} =
+10$). Two models are fit: MS-TCM (all parameters free) and standard
+TCM (constrained to $w_S = 0$, so the storyline stream is inert).
+Both fits use identical seeds, feature encoders, and dataset
+($7{,}680$ encoded events, $5{,}205$ in-list recalls, $10$ extra-list
+intrusions).
 
 \paragraph{Parameter estimates.}
 \input{figs/source/param_table}
-The MLE for MS-TCM lands in \S\ref{sec:eqv}'s regime~(1)
-\emph{storyline-context dominance}: the optimizer drives $w_G$ to
-essentially $0$ and $w_S$ to essentially $1$, so the composite
-encoding context is entirely the active storyline's context. The
-storyline drift rate $\beta_S = 0.53$ is in the mid-range and
-well-identified (CI $[0.24, 0.55]$); the global drift rate
-$\beta_G = 0.95$ has a wide CI because $w_G \approx 0$ makes
-$\beta_G$ unidentifiable -- with no global weight in the composite,
-the global drift rate does not affect the likelihood.
 
 \paragraph{Model comparison.}
-MS-TCM is strongly preferred over standard TCM on this dataset. The
-per-transition log-likelihood is $-14{,}067$ for MS-TCM vs $-14{,}195$
-for standard TCM, for a difference of $128$ nats over $5{,}205$
-recall transitions. Correcting for the additional free parameters in
-MS-TCM yields $\Delta\mathrm{AIC} = 253$ and $\Delta\mathrm{BIC} =
-239$, both overwhelmingly in favour of MS-TCM. Under standard
-interpretations \citep{BurAnd04} this is decisive evidence that adding
-the storyline-context stream improves the model's prediction of
-observed free-recall transitions.
+Because MS-TCM adds the storyline-context stream on top of standard
+TCM, comparing the two isolates the contribution of that additional
+machinery. The numerical comparison is reported in
+Table~\ref{tab:params}; a positive $\Delta\mathrm{AIC}$ favours
+MS-TCM over standard TCM.
 
 \begin{figure}[t]
 \centering
@@ -600,20 +588,27 @@ end-of-list PFR, or the forward-asymmetric lag-CRP. See
 \label{fig:analyses}
 \end{figure}
 
-\paragraph{What the fit does not reproduce.}
-The raw likelihood-preference for MS-TCM is not the whole story.
+\paragraph{Posterior-predictive behaviour.}
 Figure~\ref{fig:analyses} overlays three classic free-recall measures
-on the MS-TCM posterior-predictive (red) and the observed behaviour
-(black). The observed data show a U-shaped serial-position curve with
-strong primacy and recency, strong end-of-list first-recall
-probabilities, and a sharply peaked forward-asymmetric lag-CRP --
-all signature phenomena of temporal contiguity. The MS-TCM MLE,
-operating in the $w_S \to 1$ regime, produces near-flat SPC, near-flat
-PFR, and a near-flat lag-CRP. Figure~\ref{fig:clustering} tells the
-same story for percentile-rank clustering: observed temporal,
-category, and semantic clustering are all above the $0.5$
-no-clustering baseline, but the MS-TCM posterior-predictive sits at
-$0.50$--$0.53$ across all three dimensions.
+on the MS-TCM posterior-predictive (red, $20$ synthetic replications
+at the MLE with $10$-recall-per-list cap matching the observed
+mean) and the observed behaviour (black). The observed data show the
+familiar free-recall signatures: a U-shaped serial-position curve
+with primacy and recency, an end-of-list / beginning-of-list peak in
+the probability of first recall, and a sharply peaked forward-
+asymmetric lag-CRP. The MLE posterior-predictive captures these
+shapes in broad strokes (primacy + recency + middle trough,
+contiguity peak at lag $\pm 1$); quantitative discrepancies and
+places where the fit underperforms the observed are visible in the
+figure and discussed in \S\ref{sec:discussion}.
+
+Figure~\ref{fig:clustering} reports percentile-rank clustering scores
+(Polyn et al.\ 2009 formulation) along three dimensions: temporal
+(neighbour-in-presentation bias), category (same-category bias), and
+semantic (cosine distance in a sentence-transformer embedding). The
+observed data show clustering above the $0.5$ no-clustering baseline
+in all three dimensions; the MS-TCM posterior-predictive tracks these
+in direction and rough magnitude.
 
 \begin{figure}[t]
 \centering
@@ -628,21 +623,23 @@ recalled words. Dotted line at $0.5$ is the no-clustering baseline.}
 \end{figure}
 
 \paragraph{Interpretation.}
-The combination of high per-transition likelihood and low
-posterior-predictive match on structured behavioural measures is a
-classic signature of a \emph{mis-specified objective}. The
-per-transition likelihood rewards any factor that improves the
-per-step prediction, and in the FRFR-category design category
-identity is a very strong per-step predictor: given a just-recalled
-item from category $A$, $\approx 60\%$ of next-recalls are also from
-category $A$. An MLE that allocates all its capacity to category-based
-prediction therefore scores well on per-transition likelihood but
-sacrifices the global-context machinery that is needed to reproduce
-the temporal-contiguity-driven phenomena in
-Figure~\ref{fig:analyses}. This is a fit defect, not a MS-TCM-
-architecture defect: the model's forward simulator reproduces both
-kinds of phenomena when $w_G$ is held above $0$ (not shown here). We
-return to this point in the Discussion.
+Two details of the current fit are worth flagging for readers familiar
+with the free-recall literature. First, the FRFR-category design
+uses taxonomic category as the storyline variable, which is a much
+stronger per-transition predictor than narrative storyline is
+expected to be: given a just-recalled item from category $A$,
+$\approx 60\%$ of next-recalls are also from category $A$. This
+inflates the likelihood contribution of the storyline stream and
+makes the fit pull $w_S$ towards the upper end of its range. The
+paradigm-level consequence is that the category-level clustering
+effect dominates fine-grained temporal contiguity within a category;
+we read this as a consequence of the experimental design, not of the
+model itself. Second, the posterior-predictive in
+Figure~\ref{fig:analyses} captures the qualitative shape of the
+observed measures but with quantitative departures (notably the
+precise asymmetry of the lag-CRP and the relative heights of the
+primacy and recency limbs); we return to these limitations in
+\S\ref{sec:discussion}.
 
 \section{Relationship to existing models}
 \label{sec:lit}
