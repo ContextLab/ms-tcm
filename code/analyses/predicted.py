@@ -24,11 +24,22 @@ def params_from_fit_summary(fit_dir: str | Path) -> ModelParameters:
         if name in p:
             return float(p[name]["mle"])
         return default
+    # Derive w_global from w_storyline when only one is in the summary
+    # (which is the case for standard-TCM fits, where w_storyline is fixed
+    # at 0 and is therefore stored as "derived" while w_global is implicit).
+    w_storyline = _mle("w_storyline", None)
+    w_global = _mle("w_global", None)
+    if w_global is None and w_storyline is not None:
+        w_global = 1.0 - w_storyline
+    elif w_global is None and w_storyline is None:
+        w_global, w_storyline = 0.5, 0.5
+    elif w_storyline is None:
+        w_storyline = 1.0 - w_global
     return ModelParameters(
         beta_global=_mle("beta_global", 0.5),
         beta_storyline=max(_mle("beta_storyline", 0.5), 1e-6),
-        w_global=_mle("w_global", 0.5),
-        w_storyline=_mle("w_storyline", 1.0 - _mle("w_global", 0.5)),
+        w_global=w_global,
+        w_storyline=w_storyline,
         w_global_ret=_mle("w_global_ret", None),
         w_storyline_ret=_mle("w_storyline_ret", None),
         gamma=_mle("gamma", 0.0),
