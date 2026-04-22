@@ -1,10 +1,20 @@
-"""Figure 2: the FRFR-category experimental setup.
+"""Figure 2: FRFR-category experimental paradigm, Category condition only.
 
-One row per condition (early list = sorted by category; late list = random).
-Each row shows 16 word cells colored by category, plus a microphone icon on
-the right to indicate the verbal recall phase. Adapted from Manning et al.
-(2023) FRFR Fig. 1 (but trimmed to only the category condition since that's
-all our paper uses).
+Each row of the figure shows the 16-item presentation sequence for a
+sample participant-list (drawn from the bundled dataset), rendered as a
+sequence of screen "cartoons" that mirror what the participant actually
+saw: one word per screen, at the word's recorded screen position, in the
+word's recorded display colour. A "..." marker between the first N
+screens and the final recall screen indicates that some intermediate
+screens are elided for space. Rows are labelled right-justified on the
+left; a faint timeline bar aligns with the leftmost edge of the first
+screen. No category legend (the actual stimuli are colour-varied
+independently of category, as in Manning et al. 2023 Fig. 1).
+
+Inspired by Fig. 1 of Manning et al. (2023, PsyArXiv erzfp,
+https://github.com/ContextLab/FRFR-analyses).
+
+Output: paper/figs/source/fig_experiment.pdf (+ .png preview at 96 dpi).
 """
 
 from __future__ import annotations
@@ -16,88 +26,180 @@ from pathlib import Path
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 
-CATEGORIES = ["MAMMALS", "FRUITS", "BUILDING RELATED", "KITCHEN-RELATED"]
-CATEGORY_COLORS = {
-    "MAMMALS": "#f97316",
-    "FRUITS": "#22c55e",
-    "BUILDING RELATED": "#3b82f6",
-    "KITCHEN-RELATED": "#a855f7",
-}
+# Which participant-list pairs to draw. Picked to illustrate the early
+# (category-grouped) vs late (random) manipulation at glance. We use real
+# lists from the bundled dataset so the screen positions, colours, and
+# words are exactly what the participants saw.
+ROWS = [
+    # Participant 1 shows the category-grouped manipulation in early lists;
+    # list 15 (late) is randomised. (Participant 0's lists are all randomised.)
+    ("Early list (sorted)", 1, 0),
+    ("Late list (random)",  1, 15),
+]
+
+# How many screens to show before the "..." marker.
+N_SHOWN = 8
+# Total list length (used to compute the ellipsis position).
+LIST_LEN = 16
 
 
-def _draw_row(ax, y: float, list_label: str, order: list[str], words: list[str]):
-    ax.text(-0.3, y + 0.35, list_label, ha="right", va="center", fontsize=9)
-    for i, (cat, w) in enumerate(zip(order, words)):
-        rect = mpatches.Rectangle(
-            (i * 0.9, y), 0.85, 0.7,
-            linewidth=0.6, edgecolor="black",
-            facecolor=CATEGORY_COLORS[cat], alpha=0.85,
+def _draw_screen(
+    ax, x_left: float, y_bottom: float, w: float, h: float,
+    word: str, color_rgb: tuple[float, float, float],
+    pos_x: float, pos_y: float,
+) -> None:
+    """One FRFR screen cartoon: a rounded rectangle with a single word drawn
+    at the recorded on-screen position, in the recorded display colour.
+    ``pos_x, pos_y`` are in the upstream's [0, ~85] / [0, ~91] coordinate
+    system (normalised screen coords). We rescale them into the box.
+    """
+    box = mpatches.FancyBboxPatch(
+        (x_left, y_bottom), w, h,
+        boxstyle="round,pad=0.02,rounding_size=0.08",
+        linewidth=0.6, edgecolor="#444", facecolor="white",
+    )
+    ax.add_patch(box)
+    # Rescale upstream pos to a small margin inside the box.
+    inner_x = x_left + 0.12 * w + (pos_x / 85.0) * 0.76 * w
+    inner_y = y_bottom + 0.18 * h + (1.0 - pos_y / 91.0) * 0.64 * h
+    # Shrink the font for long words so we never overflow the box.
+    fontsize = 5.0 if len(word) <= 8 else (4.2 if len(word) <= 11 else 3.5)
+    ax.text(
+        inner_x, inner_y, word,
+        ha="center", va="center",
+        fontsize=fontsize, fontweight="bold",
+        color=color_rgb, family="DejaVu Sans",
+    )
+
+
+def _draw_recall_screen(ax, x_left: float, y_bottom: float, w: float, h: float) -> None:
+    """Terminal screen: a simple microphone pictogram labelled 'free recall'."""
+    box = mpatches.FancyBboxPatch(
+        (x_left, y_bottom), w, h,
+        boxstyle="round,pad=0.02,rounding_size=0.08",
+        linewidth=0.6, edgecolor="#444", facecolor="#fef2f2",
+    )
+    ax.add_patch(box)
+    cx = x_left + w / 2
+    cy = y_bottom + h * 0.55
+    # Microphone head (circle with a small stand).
+    ax.add_patch(mpatches.Circle((cx, cy), radius=h * 0.16,
+                                 facecolor="#dc2626", edgecolor="#7f1d1d",
+                                 linewidth=0.6))
+    # Stand/base.
+    ax.plot([cx, cx], [cy - h * 0.16, cy - h * 0.30],
+            color="#7f1d1d", linewidth=0.9)
+    ax.plot([cx - h * 0.10, cx + h * 0.10],
+            [cy - h * 0.30, cy - h * 0.30],
+            color="#7f1d1d", linewidth=0.9)
+    ax.text(cx, y_bottom + h * 0.12, "free recall",
+            ha="center", va="center", fontsize=4.5, style="italic")
+
+
+def _draw_row(
+    ax, y: float, label: str,
+    words: list[str], colors: list[tuple[float, float, float]],
+    pos_xs: list[float], pos_ys: list[float],
+    screen_w: float, screen_h: float, gap: float,
+    x_start: float, label_right: float,
+) -> tuple[float, float]:
+    """Draw one row; return (x_left of first screen, x_right of recall screen)."""
+    # Label: right-justified at label_right so its right edge sits safely to
+    # the left of the first screen.
+    ax.text(label_right, y + screen_h / 2, label,
+            ha="right", va="center", fontsize=6.5)
+
+    x = x_start
+    for i in range(N_SHOWN):
+        _draw_screen(
+            ax, x, y, screen_w, screen_h,
+            words[i], colors[i], pos_xs[i], pos_ys[i],
         )
-        ax.add_patch(rect)
-        ax.text(i * 0.9 + 0.425, y + 0.35, w,
-                ha="center", va="center", fontsize=6.5, color="white",
-                fontweight="bold")
-    # A small recall-phase indicator (the FRFR task asks for free recall at
-    # the end of every list; we draw it as an arrow into a labeled box).
-    x_arrow_from = len(order) * 0.9 + 0.05
-    x_arrow_to = x_arrow_from + 0.55
-    ax.annotate(
-        "", xy=(x_arrow_to, y + 0.35), xytext=(x_arrow_from, y + 0.35),
-        arrowprops=dict(arrowstyle="->", color="black", lw=0.8),
+        x += screen_w + gap
+
+    # Ellipsis marker for the elided middle.
+    ax.text(x + screen_w / 2, y + screen_h / 2, r"$\cdots$",
+            ha="center", va="center", fontsize=9)
+    x += screen_w + gap
+
+    # One final "last screen" before recall to show we're at end-of-list.
+    _draw_screen(
+        ax, x, y, screen_w, screen_h,
+        words[LIST_LEN - 1], colors[LIST_LEN - 1],
+        pos_xs[LIST_LEN - 1], pos_ys[LIST_LEN - 1],
     )
-    recall_box = mpatches.FancyBboxPatch(
-        (x_arrow_to, y), 1.4, 0.7,
-        boxstyle="round,pad=0.05",
-        linewidth=0.6, edgecolor="black", facecolor="#f3f4f6",
-    )
-    ax.add_patch(recall_box)
-    ax.text(x_arrow_to + 0.7, y + 0.35, "free recall",
-            ha="center", va="center", fontsize=7.5, style="italic")
+    x += screen_w + gap
+
+    # Recall screen.
+    _draw_recall_screen(ax, x, y, screen_w, screen_h)
+    x_recall_right = x + screen_w
+
+    return x_start, x_recall_right
 
 
 def draw() -> plt.Figure:
-    rng = np.random.default_rng(0)
-    words_by_cat = {
-        "MAMMALS": ["HORSE", "CAT", "DOG", "MOUSE"],
-        "FRUITS": ["APPLE", "KIWI", "MANGO", "GRAPE"],
-        "BUILDING RELATED": ["WINDOW", "DOOR", "HALL", "WALL"],
-        "KITCHEN-RELATED": ["SPATULA", "GLASS", "KNIFE", "PLATE"],
-    }
-    # Early list: grouped by category (all of one cat, then all of next...).
-    early_order: list[str] = []
-    early_words: list[str] = []
-    for cat in CATEGORIES:
-        for w in words_by_cat[cat]:
-            early_order.append(cat)
-            early_words.append(w)
-    # Late list: random.
-    pairs = list(zip(early_order, early_words))
-    rng.shuffle(pairs)
-    late_order = [p[0] for p in pairs]
-    late_words = [p[1] for p in pairs]
+    df = pd.read_parquet("data/raw/frfr_category/presented.parquet")
 
-    fig, ax = plt.subplots(figsize=(9.5, 3.2))
-    _draw_row(ax, 1.2, r"Early list (sorted)", early_order, early_words)
-    _draw_row(ax, 0.2, r"Late list (random)", late_order, late_words)
+    # Screen aspect 4:3 (computer-monitor-like).
+    screen_h = 0.58
+    screen_w = screen_h * 4.0 / 3.0
+    gap = 0.08
+    row_spacing = screen_h + 0.35
+    # Label column: right-justified text ends a bit left of the first screen.
+    label_right = 1.15
+    x_start = label_right + 0.20
 
-    ax.set_xlim(-2.5, 17.3)
-    ax.set_ylim(-0.3, 2.3)
+    # Total screens drawn per row = N_SHOWN presentation + 1 ellipsis slot +
+    # 1 final presentation + 1 recall.
+    n_slots = N_SHOWN + 3
+    # Figure width needs to accommodate all n_slots plus right margin.
+    fig_w = x_start + n_slots * (screen_w + gap) + 0.15
+    fig_h = len(ROWS) * row_spacing + 0.60
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    ax.set_xlim(0, fig_w)
+    ax.set_ylim(0, fig_h)
+    ax.set_aspect("equal")
     ax.axis("off")
 
-    # Legend.
-    handles = [
-        mpatches.Patch(color=CATEGORY_COLORS[c], label=c.title()) for c in CATEGORIES
-    ]
-    ax.legend(handles=handles, ncol=4, loc="upper center",
-              bbox_to_anchor=(0.5, -0.02), frameon=False, fontsize=8)
+    # Draw each row and capture x extents for the timeline bar.
+    first_left = None
+    last_right = None
+    y_top = fig_h - 0.50
+    for i, (label, p, lst) in enumerate(ROWS):
+        sub = (df[(df["participant"] == p) & (df["list"] == lst)]
+               .sort_values("serial_position"))
+        words = sub["word"].tolist()
+        colors = [(r / 255.0, g / 255.0, b / 255.0)
+                  for r, g, b in zip(sub["color_r"], sub["color_g"],
+                                     sub["color_b"])]
+        pos_xs = sub["pos_x"].tolist()
+        pos_ys = sub["pos_y"].tolist()
 
-    ax.text(6.5, 2.1,
-            "Feature-rich free recall: 30 participants, 16 lists/pt, 16 words/list, 4 categories/list",
-            ha="center", va="center", fontsize=10, fontweight="bold")
+        y = y_top - i * row_spacing
+        left, right = _draw_row(
+            ax, y, label, words, colors, pos_xs, pos_ys,
+            screen_w, screen_h, gap, x_start, label_right,
+        )
+        if first_left is None:
+            first_left = left
+        last_right = right
 
-    fig.tight_layout()
+    # Timeline bar: spans the full horizontal extent of the screens (starts
+    # at the left edge of the leftmost screen, not inside the label gutter).
+    timeline_y = y_top + screen_h + 0.18
+    ax.annotate(
+        "", xy=(last_right, timeline_y),
+        xytext=(first_left, timeline_y),
+        arrowprops=dict(arrowstyle="->", color="#555", lw=0.9),
+    )
+    ax.text((first_left + last_right) / 2, timeline_y + 0.10,
+            "presentation phase (16 items) $\\to$ free recall",
+            ha="center", va="bottom", fontsize=7)
+
+    fig.tight_layout(pad=0.2)
     return fig
 
 
@@ -115,8 +217,9 @@ def main() -> int:
 
     fig = draw()
     fig.savefig(out, bbox_inches="tight", transparent=True)
+    # Compact preview PNG for code review (dpi=96 keeps file size <200 KB).
     fig.savefig(out.with_suffix(".png"), bbox_inches="tight",
-                transparent=False, dpi=200)
+                transparent=False, dpi=96)
     print(f"Wrote {out}")
     return 0
 
