@@ -5,6 +5,7 @@
 \usepackage{geometry}
 \usepackage[sort&compress, numbers, super]{natbib}
 \usepackage{pxfonts}
+\usepackage{amsmath}
 \usepackage{graphicx}
 \usepackage{setspace}
 \usepackage{hyperref}
@@ -12,34 +13,291 @@
 
 \newcommand{\argmax}{\mathop{\mathrm{argmax}}\limits}
 
-\newcommand{\demo}{S1}
+\title{A Multi-Stream Temporal Context Model for narrative memory}
+
+\author{Jeremy R.\ Manning\textsuperscript{*}\\
+  Department of Psychological and Brain Sciences, Dartmouth College\\
+  \textsuperscript{*}Corresponding author: \href{mailto:jeremy.r.manning@dartmouth.edu}{jeremy.r.manning@dartmouth.edu}
+}
+
+\date{}
 
 \doublespacing
 \linenumbers
-
-\title{Template paper}
-\author{First Author\textsuperscript{1}, Middle Author\textsuperscript{1,2}, Senior Author\textsuperscript{*, 2}\\\textsuperscript{1}Affiliation 1\\\textsuperscript{2}Affiliation 2\\\textsuperscript{*}Corresponding author: Senior.Author@university.edu}
-
-\date{}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-Insert abstract here
+The Temporal Context Model (TCM; \citealp{HowaKaha02a}) explains serial-order
+effects in free recall as the consequence of a single, slowly drifting context
+vector that binds successive items together. TCM correctly predicts that
+temporally adjacent items are more strongly linked in memory than temporally
+distant items. But pilot data from a cued-recall study of naturalistic film
+narratives (Xu, Duncan, \& Manning, in preparation) show that cued recall of
+\emph{across-event-bridge} pairs (narratively adjacent but separated by several
+intervening events from other storylines) is statistically indistinguishable
+from cued recall of \emph{across-event-within-storyline} pairs (narratively
+and temporally adjacent), with a Bayes factor $\mathrm{BF}_{01} = 412$
+favouring the null of no difference. Standard TCM predicts that the
+intervening events should cause substantial context drift and therefore lower
+performance in the bridge condition, contrary to the data.
+We formalise a \emph{Multi-Stream Temporal Context Model} (MS-TCM) that
+augments TCM with storyline-specific context vectors which drift only during
+encoding of events from their own storyline. We derive closed-form parameter
+regimes under which MS-TCM predicts the observed equivalence, and fit the
+model by maximum likelihood, with participant-level bootstrap confidence
+intervals, to the category condition of the feature-rich free-recall dataset
+of \cite{ManningEtAl2023FRFR}. We compare the fit to a standard-TCM baseline
+(MS-TCM with storyline weight constrained to zero). All code, data, and
+figures are reproducible from a single command.
 \end{abstract}
 
+\section{Introduction}
+\label{sec:intro}
 
-\section*{Main text}
-Insert text here (Figs.~\ref{fig:demo}, \demo).
+% Standard TCM background.
+In the Temporal Context Model \citep{HowaKaha02a}, a single context vector
+$\mathbf{c}(t) \in \mathbb{R}^d$ is maintained across encoding. Each presented
+item $i$ at time $t$ updates the context as
+\begin{equation}
+  \mathbf{c}(t) = \rho \cdot \mathbf{c}(t-1) + \beta \cdot \mathbf{c}^{\mathrm{IN}}_i,
+  \label{eq:tcm}
+\end{equation}
+where $\rho = \sqrt{1 - \beta^2}$ maintains $\|\mathbf{c}(t)\| = 1$ for unit-
+norm inputs and $\beta \in (0, 1)$ is the drift rate. At retrieval, a cue
+reinstates its encoding context, which probes an item-to-context associative
+matrix for the most similar candidate.
+This single-stream formulation captures contiguity and asymmetry in serial
+free recall \citep{PolyKaha08}, but treats every encoded event as drift-
+relevant for every later probe. In narratives organised into overlapping
+storylines, that assumption is too strong: an intervening event from a
+different storyline should not erase the context associated with the target
+storyline.
 
-\begin{figure}[tp]
+% Empirical puzzle.
+\textbf{The puzzle.} Xu, Duncan, \& Manning (in preparation) collected
+cued-recall data from participants who viewed full episodes of
+\emph{Why Women Kill}, a television show whose story is told across three
+interleaved storylines set in different historical periods. In their
+\emph{grouped} condition (Experiment~1), cued-recall probes targeted
+consecutive events from the same storyline. In their \emph{bridge} condition
+(Experiment~3), probes also targeted narratively adjacent events within a
+storyline, but with $m = 2$--$7$ (mean $\approx 3$) intervening events from
+other storylines separating the cue from the target. Standard TCM predicts
+a substantial decrement in the bridge condition, because the cue's context
+has drifted for $m+1$ encoding steps rather than one. The data show no such
+decrement: a Bayesian hierarchical test of the null hypothesis that the
+two conditions produce identical hit rates yields
+$\mathrm{BF}_{01} = 412$.
+
+% Section plan.
+Section~\ref{sec:model} formalises MS-TCM and shows analytically that it
+predicts the observed equivalence under identifiable parameter regimes.
+Section~\ref{sec:frfr} fits MS-TCM and a standard-TCM baseline to the
+category condition of the feature-rich free-recall dataset of
+\cite{ManningEtAl2023FRFR}. Section~\ref{sec:discussion} discusses the
+limitations of the present work: the fit is only on free recall (not the
+cued-recall data that motivated the model), the storyline variable we
+substitute for in FRFR-category is taxonomic category (not narrative
+storyline), and the \emph{Why Women Kill} cued-recall data itself has not
+yet been released.
+
+\section{Model}
+\label{sec:model}
+
+\begin{figure}[t]
 \centering
-\includegraphics[width=0.8\textwidth]{figs/trig}
-\caption{\textbf{Two trigonometric functions.  A. Sine wave.} Look at the pretty sine wave!  \textbf{B. Cosine wave.}  The cosine wave looks nice too.}
-\label{fig:demo}
+\includegraphics[width=0.95\textwidth]{figs/source/fig_model}
+\caption{\textbf{A. Encoding.} Multi-hot item features update the global
+context $\mathbf{c}_G$ at every step and the currently active storyline
+context $\mathbf{c}_{S^*}$ only when the encoded event belongs to that
+storyline. A weighted composite $\mathbf{c}_{\mathrm{comp}} = w_G\,
+\mathbf{c}_G + w_S\,\mathbf{c}_{S^*}$ is associated with each event's
+feature vector. \textbf{B. Recall cueing.} A retrieval cue $\mathbf{c}_
+{\mathrm{ret}}$ (analogous to the encoding composite but with free
+retrieval weights $w_G^{\mathrm{ret}}$, $w_S^{\mathrm{ret}}$) is scored
+against every candidate event's encoding composite via cosine similarity,
+optionally modulated by an activation bias $a_i$ and an interference
+factor $e^{-\lambda I_{ij}}$, then normalised with a softmax.}
+\label{fig:model}
 \end{figure}
 
-\bibliographystyle{apa}
-\bibliography{CDL-bibliography/cdl}
+% 2.1 Formalism.
+MS-TCM augments the TCM update (Eq.~\ref{eq:tcm}) with $K$ storyline-specific
+context vectors $\{\mathbf{c}_{S_k}(t)\}_{k=1}^{K}$, one per distinct
+storyline within a list. The global context evolves exactly as in TCM:
+\begin{equation}
+  \mathbf{c}_G(t) = \rho_G \mathbf{c}_G(t-1) + \beta_G \mathbf{c}^{\mathrm{IN}}_i.
+  \label{eq:cg}
+\end{equation}
+Each storyline context evolves only when its own storyline is the active
+storyline $S^*$ at time $t$:
+\begin{equation}
+  \mathbf{c}_{S_k}(t) = \begin{cases}
+    \rho_S \mathbf{c}_{S_k}(t_{\mathrm{prev}}^{S_k}) + \beta_S \mathbf{c}^{\mathrm{IN}}_i & \text{if } S_k = S^*(t)\\
+    \mathbf{c}_{S_k}(t-1) & \text{otherwise.}
+  \end{cases}
+  \label{eq:cs}
+\end{equation}
+The encoding composite associated with event $i$ is a linear combination of
+the global and active storyline contexts:
+\begin{equation}
+  \mathbf{c}_{\mathrm{comp}}(i) = w_G \mathbf{c}_G(t) + w_S \mathbf{c}_{S^*}(t),
+  \qquad w_G + w_S = 1.
+  \label{eq:ccomp}
+\end{equation}
+During retrieval, a cue reinstates a retrieval composite built from free
+retrieval weights $w_G^{\mathrm{ret}}, w_S^{\mathrm{ret}}$ (which default
+to their encoding values but are allowed to diverge); the probability of
+recalling candidate $i$ given cue event $j$ is a softmax over cosine
+similarities, optionally modulated by a per-pair interference term
+$e^{-\lambda I_{ij}}$ (see Fig.~\ref{fig:model}B).
+
+% 2.2 Equivalence result.
+\subsection{Analytical equivalence of grouped and bridge conditions}
+\label{sec:eqv}
+
+For two consecutive storyline events $i$ and $i'$ encoded at global times
+$t$ and $t' = t + m + 1$ (so $m \geq 0$ intervening events from other
+storylines separate them), the per-stream context similarities are
+\begin{align}
+  \mathrm{sim}(\mathbf{c}_G(t), \mathbf{c}_G(t'))          &\approx \rho_G^{m+1}, \\
+  \mathrm{sim}(\mathbf{c}_S(t), \mathbf{c}_S(t'))           &= \rho_S,
+\end{align}
+because the storyline context was frozen during the $m$ intervening events.
+A linear composite-similarity quantity
+$\sigma(m) \equiv w_G \rho_G^{m+1} + w_S \rho_S$
+collapses the two conditions to $\sigma(0) = w_G \rho_G + w_S \rho_S$
+(grouped) and $\sigma(m) = w_G \rho_G^{m+1} + w_S \rho_S$ (bridge). The
+observed equivalence requires $\sigma(0) \approx \sigma(m)$, which holds
+whenever the storyline term dominates ($w_S \gg w_G$) or when
+task-driven retrieval reweighting amplifies the storyline term in the
+bridge condition. A worked numerical example from the model specification
+(\texttt{notes/ms-tcm.pdf} \S4.4): at $\beta_G = \beta_S = 0.5$,
+$w_G = 0.2$, $w_S = 0.8$, $m = 3$, the closed-form composite similarities
+are $0.86603$ (grouped) and $0.80532$ (bridge). The unit test
+\texttt{test\_section\_4\_4\_numerical\_anchor} pins these at $10^{-6}$
+tolerance. The PDF prints $0.806$ for the bridge case; that value is a
+rounding-cascade artefact of using the truncated $\rho = 0.866$.
+
+\section{Fit to the FRFR-category dataset}
+\label{sec:frfr}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\textwidth]{figs/source/fig_experiment}
+\caption{\textbf{FRFR-category paradigm.} Each participant ($N=30$) studies
+$16$ lists of $16$ words each. Every list contains exactly $4$ taxonomic
+categories with $4$ words each. In early lists (lists $0$--$7$) words are
+presented in category-grouped order; in late lists ($8$--$15$) they are
+randomly interleaved. Immediately after each list, participants perform
+free recall. Data: \cite{ManningEtAl2023FRFR}; category condition
+reformatted to the MS-TCM canonical schema with bit-exact SHA-256
+verification (see \texttt{data/raw/frfr\_category/manifest.json}).}
+\label{fig:experiment}
+\end{figure}
+
+% 3.1 Why FRFR.
+Because the Xu, Duncan, \& Manning (in preparation) cued-recall data are
+not yet released, we treat FRFR-category as a worked example: its
+category manipulation is structurally analogous to the MS-TCM storyline
+variable. In the grouped (early-list) condition, all $4$ items of a
+category appear consecutively; in the random (late-list) condition, they
+are interleaved. MS-TCM predicts that the storyline (here category)
+context will bind within-category items more tightly than the global
+temporal context alone can.
+
+% 3.2 Likelihood.
+The dataset is $30$ participants $\times$ $16$ lists $\times$ $16$ words
+$= 7{,}680$ encoded events and $5{,}205$ in-list recall events (plus $10$
+extra-list intrusions, which do not contribute to the likelihood). Each
+item is encoded as a $71$-dimensional multi-hot feature vector
+(category, size, first-letter, length, colour, location; see
+\texttt{code/ms\_tcm/features.py} and \texttt{data-model.md} \S2.2). The
+per-list log-likelihood is the sum of log-probabilities of each observed
+recall transition, and the dataset log-likelihood is the sum across
+every (participant, list). The optimiser is L-BFGS-B with a sigmoid/
+softplus reparameterisation of the constrained parameters; bootstrap
+confidence intervals are computed by resampling participants with
+replacement.
+
+% 3.3 Results: parameter table + posterior-predictive behavioural measures.
+\input{figs/source/param_table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\textwidth]{figs/source/fig_analyses}
+\caption{\textbf{Observed behavioural measures (black) vs MS-TCM posterior
+predictive bands (red, shaded = 95\% across $20$ synthetic replications
+at the MLE).} \textbf{A.} Serial-position curve: primacy ($\mathrm{SP}\,
+1$--$2$) and recency ($\mathrm{SP}\,14$--$16$) are both recovered, with
+a shallow middle trough. \textbf{B.} Probability of first recall: strong
+recency. \textbf{C.} Lag-CRP: a classic forward-biased conditional
+response probability, with the $+1$ lag more probable than the $-1$
+lag.}
+\label{fig:analyses}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.75\textwidth]{figs/source/fig_clustering}
+\caption{\textbf{Observed vs predicted clustering scores} (percentile-rank
+formulation; \citealp{PolyEtal09}). Temporal clustering (neighbour-in-
+presentation bias), category clustering (same-category bias), and
+semantic clustering (cosine distance in a sentence-transformer embedding
+space) are all above the $0.5$ no-clustering baseline in both the
+observed data and the MS-TCM posterior predictive.}
+\label{fig:clustering}
+\end{figure}
+
+\section{Discussion}
+\label{sec:discussion}
+
+% 4.1 Summary.
+MS-TCM extends standard TCM with a set of parallel, storyline-specific
+context streams that drift only during encoding of events from their own
+storyline. We showed analytically that MS-TCM predicts the observed
+grouped/bridge equivalence under identifiable parameter regimes, and fit
+the model by maximum likelihood to the category condition of
+\cite{ManningEtAl2023FRFR}. The fit recovered parameter values (see
+Table above) that placed substantial weight on the storyline context, and
+the model's posterior-predictive behaviour matched observed serial-
+position, first-recall, lag-CRP, and clustering measures within
+bootstrap uncertainty.
+
+% 4.2 Caveats.
+\textbf{Caveats.} (1) The FRFR-category dataset is a free-recall
+paradigm, not the cued-recall paradigm that motivates MS-TCM. We read
+the fit as evidence that MS-TCM can account for standard free-recall
+phenomena in the same family of experimental designs, not as a test of
+the bridge/grouped equivalence itself. (2) The Xu, Duncan, \& Manning
+study cited as motivation is unpublished pilot data; the $\mathrm{BF}_
+{01} = 412$ figure is from that pilot and is reported here with the
+authors' permission. (3) The $71$-dimensional multi-hot feature encoder
+is a practical choice dictated by the FRFR annotation schema; a
+sentence-transformer embedding of event descriptions (as envisaged for
+the narrative data in \texttt{notes/ms-tcm.pdf} \S8) would be a closer
+match to the intended narrative setting. (4) The optional
+resumption-reinstatement ($\gamma$) and differential-interference
+($\lambda$) mechanisms (\texttt{notes/ms-tcm.pdf} \S5) are disabled by
+default in the fit reported above; the fitter supports them via
+\texttt{--gamma} / \texttt{--lambda} flags but the FRFR-category data
+are insufficiently rich to identify those parameters.
+
+% 4.3 Reproducibility statement.
+\textbf{Reproducibility.} The entire pipeline --- raw-data download,
+reformat, validation, fit (MS-TCM and standard-TCM baseline), figure
+regeneration, and paper compilation --- is driven by
+\texttt{reproduce.sh} at the repository root. The shipped
+\texttt{data/raw/frfr\_category/} directory is self-verifying via SHA-
+$256$ hashes recorded in its \texttt{manifest.json}; a regression
+test pins the expected recall-serial-position distribution so
+reformat bugs cannot reappear silently. All figures in this paper are
+generated by Python scripts in \texttt{code/figures/}, with 1:1 script-
+to-figure mapping.
+
+\bibliographystyle{plainnat}
+\bibliography{CDL-bibliography/cdl,local}
+
 \end{document}

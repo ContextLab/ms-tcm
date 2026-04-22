@@ -3,8 +3,9 @@
 \usepackage[english]{babel}
 \usepackage[font=small,labelfont=bf]{caption}
 \usepackage{geometry}
-\usepackage{natbib}
+\usepackage[sort&compress, numbers, super]{natbib}
 \usepackage{pxfonts}
+\usepackage{amsmath}
 \usepackage{graphicx}
 \usepackage{newfloat}
 \usepackage{setspace}
@@ -12,23 +13,17 @@
 \usepackage{placeins}
 
 \newcommand{\argmax}{\mathop{\mathrm{argmax}}\limits}
-\newcommand{\argmin}{\mathop{\mathrm{argmin}}\limits}
 
-\newcommand{\demo}{1}
-
-\title{\textit{Supplementary materials for}: Template paper}
-\author{First Author\textsuperscript{1}, Middle Author\textsuperscript{1,2}, Senior Author\textsuperscript{*, 2}\\\textsuperscript{1}Affiliation 1\\\textsuperscript{2}Affiliation 2\\\textsuperscript{*}Corresponding author: Senior.Author@university.edu}
-
-\bibliographystyle{apa}
+\title{\textit{Supplementary materials for}: A Multi-Stream Temporal Context Model for narrative memory}
+\author{Jeremy R.\ Manning\textsuperscript{*}\\
+  Department of Psychological and Brain Sciences, Dartmouth College\\
+  \textsuperscript{*}Corresponding author: \href{mailto:jeremy.r.manning@dartmouth.edu}{jeremy.r.manning@dartmouth.edu}
+}
 
 \begin{document}
 
 \renewcommand{\figurename}{Supplementary Figure}
-
-%\begin{titlepage}
-%  \maketitle
-%  \thispagestyle{empty}
-%\end{titlepage}
+\renewcommand{\tablename}{Supplementary Table}
 
 \setcounter{equation}{0}
 \setcounter{figure}{0}
@@ -38,25 +33,50 @@
 \makeatletter
 \renewcommand{\theequation}{S\arabic{equation}}
 \renewcommand{\thefigure}{S\arabic{figure}}
+\renewcommand{\thetable}{S\arabic{table}}
 \renewcommand{\bibnumfmt}[1]{[S#1]}
 \renewcommand{\citenumfont}[1]{S#1}
 
-\newcommand{\demo}{1}
-
 \maketitle
 
-\begin{figure}[tp]
-\centering
-\includegraphics[width=0.6\textwidth]{figs/trig}
-\caption{\textbf{Two trigonometric functions, but rendered smaller.  A. Sine wave.} Look at the pretty sine wave!  \textbf{B. Cosine wave.}  The cosine wave looks nice too.  Also see Figure~\demo~in the main text.}
-\label{fig:demo}
-\end{figure}
+\section*{S1. Off-by-one correction in the reformatted recall table}
+
+The upstream \texttt{exp2.egg} file from \cite{ManningEtAl2023FRFR} encodes
+each recall event's provenance in a \texttt{temporal} HDF5 attribute that is
+0-indexed against the \texttt{i\{k\}} subgroup names in the presented
+group. The initial reformat (\texttt{scripts/reformat\_frfr\_category.py},
+commit \texttt{8684fa0}) treated \texttt{temporal} as if it were 1-indexed,
+which shifted every in-list recall's serial position down by one and
+silently re-coded the last word of every list as an extra-list intrusion.
+The corrected mapping (commit \texttt{405e272}, \texttt{sp = temporal + 1}
+for \texttt{temporal} $\in [0, 15]$, else \texttt{sp = 0}) restores the
+expected serial-position distribution (primacy at SP1--2, recency at
+SP14--16) and reduces the extra-list intrusion count from $399$ to $10$.
+
+A regression test at
+\texttt{code/tests/test\_frfr.py::test\_recall\_serial\_position\_shape}
+asserts $P(\text{recall}) > 0.3$ for the last three serial positions and
+an intrusion rate below $5\%$, so any future off-by-one would fail CI.
+
+\section*{S2. \S4.4 rounding cascade}
+
+The model specification \texttt{notes/ms-tcm.pdf} \S4.4 reports the bridge-
+condition composite similarity as $0.806$ at $\beta_G = \beta_S = 0.5$,
+$w_G = 0.2$, $w_S = 0.8$, $m = 3$. This is a rounding-cascade artefact.
+Using the closed form $\rho = \sqrt{1 - \beta^2} = \sqrt{0.75}$ gives
+$\sigma(3) = 0.2 \cdot 0.75^2 + 0.8 \cdot \sqrt{0.75} = 0.1125 + 0.6928 =
+0.80532\dots$, which rounds to $0.805$ at three decimals (not $0.806$).
+The PDF's derivation used the truncated $\rho \approx 0.866$, then
+$\rho^4 \approx 0.563$, then rounded up at the final step.
+The unit test \texttt{test\_section\_4\_4\_numerical\_anchor} asserts the
+closed-form values $0.86603$ (grouped) and $0.80532$ (bridge) at $10^{-6}$
+tolerance. The agreement between the analytical closed-form and the model
+code is therefore exact; the apparent discrepancy with the PDF is purely a
+documentation issue.
 
 \newpage
 \renewcommand{\refname}{Supplementary references}
-\bibliographystyle{apa}
-\bibliography{CDL-bibliography/cdl}
-
-
+\bibliographystyle{plainnat}
+\bibliography{CDL-bibliography/cdl,local}
 
 \end{document}
