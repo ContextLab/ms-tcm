@@ -25,8 +25,31 @@ from pathlib import Path
 
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
+from matplotlib import font_manager as fm
 import numpy as np
 import pandas as pd
+
+
+def _font_awesome_props():
+    """Return a FontProperties for the Font Awesome microphone glyph if the
+    OTF is installed locally; otherwise return None so we can fall back to a
+    hand-drawn pictogram.
+    """
+    candidates = [
+        Path.home() / "Library" / "Fonts" / "FontAwesome.otf",
+        Path("/Library/Fonts/FontAwesome.otf"),
+        Path("/usr/share/fonts/opentype/font-awesome/FontAwesome.otf"),
+    ]
+    for p in candidates:
+        if p.exists():
+            fm.fontManager.addfont(str(p))
+            return fm.FontProperties(fname=str(p))
+    return None
+
+
+_FA = _font_awesome_props()
+# Font Awesome 4.x microphone glyph (Unicode private-use code point 0xF130).
+_FA_MIC = ""
 
 
 # Which participant-list pairs to draw. Picked to illustrate the early
@@ -76,7 +99,11 @@ def _draw_screen(
 
 
 def _draw_recall_screen(ax, x_left: float, y_bottom: float, w: float, h: float) -> None:
-    """Terminal screen: a simple microphone pictogram labelled 'free recall'."""
+    """Terminal screen: a Font Awesome microphone glyph labelled 'free recall'.
+
+    If Font Awesome is not installed we fall back to a hand-drawn mic
+    pictogram so the figure still renders cleanly in headless CI.
+    """
     box = mpatches.FancyBboxPatch(
         (x_left, y_bottom), w, h,
         boxstyle="round,pad=0.02,rounding_size=0.08",
@@ -85,16 +112,28 @@ def _draw_recall_screen(ax, x_left: float, y_bottom: float, w: float, h: float) 
     ax.add_patch(box)
     cx = x_left + w / 2
     cy = y_bottom + h * 0.55
-    # Microphone head (circle with a small stand).
-    ax.add_patch(mpatches.Circle((cx, cy), radius=h * 0.16,
-                                 facecolor="#dc2626", edgecolor="#7f1d1d",
-                                 linewidth=0.6))
-    # Stand/base.
-    ax.plot([cx, cx], [cy - h * 0.16, cy - h * 0.30],
-            color="#7f1d1d", linewidth=0.9)
-    ax.plot([cx - h * 0.10, cx + h * 0.10],
-            [cy - h * 0.30, cy - h * 0.30],
-            color="#7f1d1d", linewidth=0.9)
+
+    if _FA is not None:
+        # Font Awesome microphone glyph, sized relative to the screen height.
+        ax.text(
+            cx, cy, _FA_MIC,
+            ha="center", va="center",
+            fontproperties=_FA,
+            fontsize=16,
+            color="#dc2626",
+        )
+    else:
+        # Hand-drawn fallback.
+        ax.add_patch(mpatches.Circle(
+            (cx, cy), radius=h * 0.16,
+            facecolor="#dc2626", edgecolor="#7f1d1d", linewidth=0.6,
+        ))
+        ax.plot([cx, cx], [cy - h * 0.16, cy - h * 0.30],
+                color="#7f1d1d", linewidth=0.9)
+        ax.plot([cx - h * 0.10, cx + h * 0.10],
+                [cy - h * 0.30, cy - h * 0.30],
+                color="#7f1d1d", linewidth=0.9)
+
     ax.text(cx, y_bottom + h * 0.12, "free recall",
             ha="center", va="center", fontsize=4.5, style="italic")
 
@@ -157,17 +196,21 @@ def draw() -> plt.Figure:
     n_slots = N_SHOWN + 3
     # Figure width needs to accommodate all n_slots plus right margin.
     fig_w = x_start + n_slots * (screen_w + gap) + 0.15
-    fig_h = len(ROWS) * row_spacing + 0.60
+    # Figure height: top margin for timeline bar + rows + small bottom margin.
+    top_margin = 0.75
+    fig_h = top_margin + len(ROWS) * row_spacing + 0.15
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     ax.set_xlim(0, fig_w)
     ax.set_ylim(0, fig_h)
     ax.set_aspect("equal")
     ax.axis("off")
 
-    # Draw each row and capture x extents for the timeline bar.
+    # Draw each row and capture x extents for the timeline bar. The topmost
+    # row of screens sits ``top_margin`` below the figure top, leaving a clear
+    # band above for the timeline bar and its label.
     first_left = None
     last_right = None
-    y_top = fig_h - 0.50
+    y_top = fig_h - top_margin - screen_h
     for i, (label, p, lst) in enumerate(ROWS):
         sub = (df[(df["participant"] == p) & (df["list"] == lst)]
                .sort_values("serial_position"))
