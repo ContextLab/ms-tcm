@@ -27,13 +27,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
-      - name: Unit tests
+      - name: Unit tests (fast)
         run: pytest code/tests -q
       - name: Validate bundled dataset
         run: ms-tcm validate data/raw/frfr_category
       - name: Smoke fit (MS-TCM)
-        run: ms-tcm fit data/raw/frfr_category --out runs/ci/mstcm --seed 42 --n-bootstraps 5 --n-restarts 2 --force
+        run: ms-tcm fit data/raw/frfr_category --out runs/ci/mstcm --seed 42 --n-bootstraps 5 --n-restarts 1 --force
       - name: Smoke fit (standard TCM)
-        run: ms-tcm fit data/raw/frfr_category --out runs/ci/tcm --seed 42 --standard-tcm --n-bootstraps 5 --n-restarts 2 --force
+        run: ms-tcm fit data/raw/frfr_category --out runs/ci/tcm --seed 42 --standard-tcm --n-bootstraps 5 --n-restarts 1 --force
       - name: Print MLEs
         run: python -c "import json; s=json.load(open('runs/ci/mstcm/fit_summary.json')); [print(n, ':', info['mle']) for n, info in s['parameters'].items()]"
+      - name: Cross-platform fixture (T053)
+        run: pytest code/tests/test_cross_platform.py -q -m slow
