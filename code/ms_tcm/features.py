@@ -182,11 +182,21 @@ def _encode_row(row: pd.Series) -> np.ndarray:
     return v
 
 
-def encode_features(presented) -> np.ndarray:
+def encode_features(presented, *, normalize: bool = True) -> np.ndarray:
     """Return a (n_rows, FEATURE_DIM) float64 feature matrix.
 
     Accepts either a pyarrow Table or a pandas DataFrame with the columns
     defined in contracts/dataset-schema.md section 3.
+
+    By default each row is L2-normalized to unit length. This matters because
+    TCM's drift equation c(t) = rho * c(t-1) + beta * c_in assumes unit-norm
+    inputs so that rho = sqrt(1 - beta^2) preserves ||c(t)|| = 1 (see Howard
+    & Kahana 2002, Eq. 3 and the surrounding discussion). Multi-hot raw
+    features have norm sqrt(k) where k is the number of active slots; using
+    those directly breaks the invariant and causes the similarity calculation
+    to produce essentially-uniform softmax outputs regardless of beta. Pass
+    ``normalize=False`` to skip normalization (e.g. in unit tests that
+    supply their own unit-norm basis vectors).
     """
     if isinstance(presented, pa.Table):
         df = presented.to_pandas()
@@ -195,4 +205,8 @@ def encode_features(presented) -> np.ndarray:
     out = np.zeros((len(df), FEATURE_DIM), dtype=np.float64)
     for i, (_, row) in enumerate(df.iterrows()):
         out[i, :] = _encode_row(row)
+    if normalize:
+        norms = np.linalg.norm(out, axis=1, keepdims=True)
+        norms = np.where(norms == 0.0, 1.0, norms)  # guard against all-zero rows
+        out = out / norms
     return out

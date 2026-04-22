@@ -30,8 +30,23 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray, *, eps: float = 1e-30) -> fl
     return float(np.dot(a, b) / ((na + eps) * (nb + eps)))
 
 
-def recall_probabilities(scores: np.ndarray) -> np.ndarray:
-    """Softmax with temperature 1, numerically stable (log-sum-exp via scipy)."""
+def recall_probabilities(scores: np.ndarray, *, tau: float = 1.0) -> np.ndarray:
+    """Softmax ``P(i) = exp(tau * s_i) / sum_j exp(tau * s_j)``.
+
+    ``tau`` is an inverse-temperature / gain parameter. At ``tau = 1`` the
+    output is the straight softmax of the raw scores; higher ``tau`` sharpens
+    the distribution toward the winning candidate. This is a practical
+    necessity when scores are bounded cosine similarities in [-1, 1]: with
+    ``tau = 1`` the softmax of a distinguishable-but-bounded similarity
+    vector is close to uniform, which erases the contiguity and recency
+    signatures that TCM is supposed to capture. TCM-A (Sederberg et al.,
+    2008) implements the same sharpening through a separate accumulator
+    dynamics; fitting a single ``tau`` is a lower-fidelity approximation
+    that nonetheless recovers the qualitative shape of SPC, P(first recall),
+    and lag-CRP.
+
+    Numerically stable via scipy's log-sum-exp softmax.
+    """
     scores = np.asarray(scores, dtype=np.float64)
     if scores.ndim != 1:
         raise ValueError(
@@ -41,4 +56,6 @@ def recall_probabilities(scores: np.ndarray) -> np.ndarray:
         # Propagate an all-NaN input so upstream callers can detect it; a normal
         # softmax would silently fold the NaN into the sum.
         return np.full_like(scores, np.nan)
+    if tau != 1.0:
+        scores = float(tau) * scores
     return _scipy_softmax(scores)

@@ -33,6 +33,9 @@ def params_from_fit_summary(fit_dir: str | Path) -> ModelParameters:
         w_storyline_ret=_mle("w_storyline_ret", None),
         gamma=_mle("gamma", 0.0),
         lambda_interference=_mle("lambda_interference", 0.0),
+        tau=_mle("tau", 1.0),
+        phi_s=_mle("phi_s", 0.0),
+        phi_d=_mle("phi_d", 1.0),
         feature_dim=71,
         seed=0,
     )

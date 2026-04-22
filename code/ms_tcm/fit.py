@@ -57,12 +57,21 @@ def _free_parameter_names(
         names = ["beta_global", "beta_storyline", "w_global"]
         if separate_retrieval_weights:
             names.append("w_global_ret")
+    # tau (softmax gain) and phi_s / phi_d (primacy gradient) are always
+    # free. Without tau the softmax of bounded cosine similarities is close
+    # to uniform and the model cannot produce recency or contiguity; without
+    # phi_s / phi_d the model has no primacy mechanism at all.
+    names.extend(["tau", "phi_s", "phi_d"])
     opt = optional_mechanisms or {}
     if opt.get("gamma"):
         names.append("gamma")
     if opt.get("lambda"):
         names.append("lambda_interference")
     return names
+
+
+_SIGMOID_PARAMS = ("beta_global", "beta_storyline", "w_global", "w_global_ret")
+_SOFTPLUS_PARAMS = ("gamma", "lambda_interference", "tau", "phi_s", "phi_d")
 
 
 def _pack_theta(
@@ -72,10 +81,10 @@ def _pack_theta(
     z = np.empty(len(free_names), dtype=np.float64)
     for i, name in enumerate(free_names):
         v = theta[name]
-        if name in ("beta_global", "beta_storyline", "w_global", "w_global_ret"):
+        if name in _SIGMOID_PARAMS:
             v = min(max(v, 1e-8), 1 - 1e-8)
             z[i] = float(np.log(v / (1 - v)))
-        elif name in ("gamma", "lambda_interference"):
+        elif name in _SOFTPLUS_PARAMS:
             v = max(v, 1e-8)
             z[i] = float(np.log(np.expm1(v)))
         else:
@@ -90,9 +99,9 @@ def _unpack_theta(
     theta: dict[str, float] = {}
     for i, name in enumerate(free_names):
         zi = float(z[i])
-        if name in ("beta_global", "beta_storyline", "w_global", "w_global_ret"):
+        if name in _SIGMOID_PARAMS:
             theta[name] = _sigmoid(zi)
-        elif name in ("gamma", "lambda_interference"):
+        elif name in _SOFTPLUS_PARAMS:
             theta[name] = _softplus(zi)
         else:
             theta[name] = zi
@@ -114,6 +123,9 @@ def _unpack_theta(
 
     theta.setdefault("gamma", 0.0)
     theta.setdefault("lambda_interference", 0.0)
+    theta.setdefault("tau", 1.0)
+    theta.setdefault("phi_s", 0.0)
+    theta.setdefault("phi_d", 1.0)
     return theta
 
 
@@ -127,6 +139,9 @@ def _theta_to_params(theta: dict[str, float]) -> ModelParameters:
         w_storyline_ret=theta["w_storyline_ret"],
         gamma=theta.get("gamma", 0.0),
         lambda_interference=theta.get("lambda_interference", 0.0),
+        tau=theta.get("tau", 1.0),
+        phi_s=theta.get("phi_s", 0.0),
+        phi_d=theta.get("phi_d", 1.0),
     )
 
 

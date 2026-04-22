@@ -28,6 +28,9 @@ class ModelParameters:
     gamma: float = 0.0
     alpha_enabled: bool = False
     lambda_interference: float = 0.0
+    tau: float = 1.0
+    phi_s: float = 0.0
+    phi_d: float = 1.0
     feature_dim: int = 71
     seed: int = 0
 
@@ -88,6 +91,12 @@ class ModelParameters:
             raise ValueError(
                 f"lambda_interference must be >= 0; got {self.lambda_interference!r}"
             )
+        if self.tau <= 0.0:
+            raise ValueError(f"tau must be > 0; got {self.tau!r}")
+        if self.phi_s < 0.0:
+            raise ValueError(f"phi_s must be >= 0; got {self.phi_s!r}")
+        if self.phi_d <= 0.0:
+            raise ValueError(f"phi_d must be > 0; got {self.phi_d!r}")
 
     @classmethod
     def standard_tcm(cls, **kwargs: Any) -> "ModelParameters":

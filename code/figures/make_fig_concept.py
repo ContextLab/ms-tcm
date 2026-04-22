@@ -196,13 +196,15 @@ def draw() -> plt.Figure:
     for t, k in enumerate(VIEWER_SEQUENCE):
         x = braid_left + t * tick_w
         t0, t1 = segment_map[t]
-        _draw_gradient_bar(
-            ax, x, braid_y, tick_w, braid_h, cmaps[k],
-            t0=t0, t1=t1,
-            edgecolor="#334155", lw=0.4,
+        # Fill each braid segment with a SINGLE colour corresponding to its
+        # position along storyline k's internal clock (midpoint of the
+        # [t0, t1] sub-range). Within a segment there is no further gradient.
+        colour = cmaps[k]((t0 + t1) / 2)
+        _flat_bar(
+            ax, x, braid_y, tick_w, braid_h,
+            color=colour, edgecolor="#334155", lw=0.4,
         )
         # Thin guide line back up to the strand segment in panel (A).
-        # Find the matching segment's x-range in (A).
         src_ticks = clocks[k]
         idx = src_ticks.index(t)
         src_x0 = panel_a_left + (idx / len(src_ticks)) * (panel_a_right - panel_a_left)
@@ -213,7 +215,7 @@ def draw() -> plt.Figure:
             (src_mid, src_y),
             (x + tick_w / 2, braid_y + braid_h),
             connectionstyle="arc3,rad=-0.25",
-            arrowstyle="-", color=STORY_COLOURS[k][1], lw=0.55, alpha=0.45,
+            arrowstyle="-", color=STORY_COLOURS[k][1], lw=0.45, alpha=0.25,
             zorder=1,
         )
         ax.add_patch(arc)
@@ -280,12 +282,15 @@ def draw() -> plt.Figure:
         for t, s in enumerate(VIEWER_SEQUENCE):
             x = ctx_left + t * tick_w
             if s == k:
-                # Active: drift along internal clock.
+                # Active: advance the internal clock by one segment and colour
+                # this tick at the midpoint of the new segment. No within-
+                # segment gradient; each tick is a single solid colour.
                 t0 = last_internal
                 t1 = last_internal + internal_step
-                _draw_gradient_bar(
-                    ax, x, y_s, tick_w, ctx_h, cmap_k,
-                    t0=t0, t1=t1,
+                active_colour = cmap_k((t0 + t1) / 2)
+                _flat_bar(
+                    ax, x, y_s, tick_w, ctx_h,
+                    color=active_colour,
                     edgecolor="#334155", lw=0.3,
                 )
                 last_internal = t1

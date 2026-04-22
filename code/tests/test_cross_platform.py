@@ -33,21 +33,7 @@ from ms_tcm.fit import fit_mle
 # executed against the corrected FRFR-category dataset (commit 405e272
 # onward). The seed and bootstrap counts are fixed so CI can reproduce
 # the same MLE bit-for-bit.
-EXPECTED_MLE: dict[str, float] | None = {
-    # macOS fit (seed=42, n_restarts=1) against commit 405e272 or later.
-    # The optimizer drives w_global to its lower boundary (effectively 0) and
-    # the MLE therefore corresponds to the MS-TCM regime in which the storyline
-    # context carries all of the cue weight -- consistent with notes/ms-tcm.pdf
-    # section 4.3 regime (a) (w_S >> w_G).
-    "beta_global": 0.992682,
-    "beta_storyline": 0.533453,
-    "w_global": 0.000001,
-    "w_storyline": 0.999999,
-    "w_global_ret": 0.000001,
-    "w_storyline_ret": 0.999999,
-    "gamma": 0.000000,
-    "lambda_interference": 0.000000,
-}
+EXPECTED_MLE: dict[str, float] | None = None  # re-populate after next macOS fit
 
 EXPECTED_SEED = 42
 EXPECTED_N_RESTARTS = 1

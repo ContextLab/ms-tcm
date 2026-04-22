@@ -193,7 +193,17 @@ class MSTCMModel:
             i_ij = np.maximum(gap - 1.0, 0.0)
             factor = np.exp(-float(p.lambda_interference) * i_ij)
             sims = sims * factor
-        return recall_probabilities(sims)
+        # Primacy gradient (Polyn et al. 2009, Eq. 8): item-i activation bias
+        # phi_i = phi_s * exp(-phi_d * (i-1)) + 1 boosts early-list items,
+        # producing the primacy limb of the serial-position curve. Vanilla
+        # TCM has no primacy mechanism; without this the model only
+        # predicts recency. phi_s = 0 disables primacy (default).
+        if p.phi_s > 0.0:
+            W = sims.shape[0]
+            positions = np.arange(W, dtype=np.float64)  # 0-indexed so i=1 -> 0
+            primacy = float(p.phi_s) * np.exp(-float(p.phi_d) * positions) + 1.0
+            sims = sims * primacy
+        return recall_probabilities(sims, tau=p.tau)
 
     def score_first_recall(
         self, state: EncodingState, participant: int, list_: int,

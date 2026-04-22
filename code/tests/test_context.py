@@ -21,25 +21,25 @@ def test_global_context_drift() -> None:
 def test_storyline_context_frozen_when_inactive() -> None:
     """§3.2: storyline contexts don't drift when their storyline is inactive.
 
-    Since ``update_storyline_context`` is only called when the storyline IS
-    active, ""frozen-when-inactive"" means: if we never call the updater for
-    storyline S at steps t...t+k, c_S at t+k+1 (when S becomes active again)
-    still equals its value at t. The updater respecting this is a call-site
-    property; here we check the direct identity: calling the updater once
-    with the same inputs is idempotent-to-math, so the returned vector is
-    exactly the closed-form combination.
+    "Frozen-when-inactive" means: if the updater is never called for storyline
+    S at steps t...t+k, c_S at t+k+1 (when S becomes active again) still
+    equals its value at t. That bookkeeping is the caller's responsibility --
+    the updater itself is a pure function. Here we also check that the
+    updater, under orthogonal unit-norm inputs (the setting in which
+    rho = sqrt(1 - beta^2) holds exactly), returns the closed-form
+    combination.
     """
     beta_s = 0.4
-    c_prev = np.array([0.3, -0.5, 1.2])
-    c_in = np.array([0.7, 0.0, -0.4])
+    # Orthogonal unit-norm inputs -- the setting in which the closed-form
+    # rho = sqrt(1 - beta^2) applies exactly.
+    c_prev = np.array([1.0, 0.0, 0.0])
+    c_in = np.array([0.0, 1.0, 0.0])
     rho_s = np.sqrt(1.0 - beta_s**2)
 
     out1 = update_storyline_context(c_prev, beta_s, c_in)
     np.testing.assert_allclose(out1, rho_s * c_prev + beta_s * c_in, atol=1e-12)
 
-    # "Frozen" means: if we do not call the updater, the vector is unchanged.
-    # We check this by confirming that the bookkeeping is the caller's
-    # responsibility — the updater itself is pure.
+    # Frozen semantics: if we do not call the updater, the vector is unchanged.
     c_frozen = c_prev.copy()
     # ...many inactive steps...
     assert np.array_equal(c_frozen, c_prev)
