@@ -274,17 +274,28 @@ encoding weights $(w_G, w_S)$. Task instructions can rebalance the
 cue: for instance, being asked to recall "what happened next in the
 same storyline" should plausibly increase $\wSret$ relative to
 $\wGret$, amplifying the storyline context's contribution to the cue.
-The probability of recalling a candidate event $i$ given cue $j$
-is a softmax over a scored similarity:
+The probability of recalling a candidate event $i$ given cue $j$ is a
+softmax-with-gain over a scored similarity,
 \begin{equation}
-  P(i \mid j) \propto
-    \mathrm{cos}(\cret(j),\,\ccomp(i))\cdot a_i \cdot e^{-\lambda I_{ij}},
+  s_i(j) = \mathrm{cos}\bigl(\cret(j),\,\ccomp(i)\bigr)\cdot a_i
+           \cdot e^{-\lambda I_{ij}},
+  \qquad
+  P(i \mid j) = \frac{\exp(\tau\,s_i(j))}{\sum_{k \in \mathcal{C}(j)} \exp(\tau\,s_k(j))},
   \label{eq:pij}
 \end{equation}
-where $a_i$ is an optional item-level activation bias, $I_{ij}$ is a
-cumulative between-event interference term scaled by $\lambda$
-(\S\ref{sec:extras} below), and the normalization runs over the
-candidate set.
+where $a_i = \phi_s\, e^{-\phi_d (i-1)} + 1$ is the Polyn-et-al.-style
+primacy-gradient item bias, $\tau > 0$ is an inverse-temperature /
+softmax gain, $I_{ij}$ is the cumulative between-event interference
+term scaled by $\lambda$ (\S\ref{sec:extras}), and the candidate set
+$\mathcal{C}(j)$ is the set of list items that have not yet been
+recalled on the current list (the standard TCM / CMR "no repeats"
+convention). Both $\tau$ and $(\phi_s, \phi_d)$ are fit alongside the
+other free parameters. Without $\tau$ the softmax of bounded cosine
+similarities in $[-1, 1]$ is close to uniform and the model fails to
+produce any of the shape features of free recall; without
+$(\phi_s, \phi_d)$ there is no primacy mechanism and the serial-
+position curve has only a recency limb. Setting $\phi_s = 0$ recovers
+the vanilla formulation.
 
 \paragraph{Relationship to TCM and CMR.}
 MS-TCM specializes to standard TCM \citep{HowaKaha02a} when $w_S = 0$,
