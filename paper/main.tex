@@ -725,31 +725,27 @@ demonstrated the machinery on a public free-recall dataset whose
 category manipulation is structurally analogous to the storyline
 manipulation in the target experiment (\S\ref{sec:frfr}).
 
-\paragraph{The fit tells us two things.}
-First, the per-transition-likelihood preference for MS-TCM over
-standard TCM is enormous ($\Delta\mathrm{AIC} = 253$,
-$\Delta\mathrm{BIC} = 239$) on the FRFR-category data. Every
-standard information-criterion interpretation places the posterior
-odds overwhelmingly in favour of the multi-stream architecture. This
-is non-trivial evidence that the storyline stream carries real
-predictive signal for human free recall of category-structured
-word lists, not just for naturalistic narratives.
+\paragraph{What the fit does and does not tell us.}
+The fit on FRFR-category establishes that MS-TCM's machinery --
+parallel context streams with frozen-while-inactive dynamics, a
+softmax-gain decision rule, and a primacy gradient -- can jointly
+reproduce the three canonical free-recall signatures (SPC, PFR,
+lag-CRP) and the three clustering measures (temporal / category /
+semantic). The observed $\Delta\mathrm{AIC}$ between MS-TCM and its
+$w_S = 0$ special case (standard TCM) is reported in
+Table~\ref{tab:params}; under standard information-criterion
+interpretations \citep{BurAnd04}, adding the storyline stream is
+warranted on this dataset.
 
-Second, the MLE alone is \emph{not sufficient} to characterize the
-model's empirical adequacy. The per-transition-likelihood-MLE
-allocates all the encoding-composite mass to the storyline stream
-($w_S \to 1$) and in doing so loses the ability to reproduce
-temporal-contiguity phenomena (Figures~\ref{fig:analyses} and
-\ref{fig:clustering}). The model's forward simulator, run at
-hand-picked parameters that keep $w_G$ away from $0$, does reproduce
-both kinds of phenomena. We read this as a specification problem:
-a pure per-transition-likelihood objective is insufficient for
-fitting a model that needs to reproduce both point-transition and
-list-structured phenomena. Two natural remedies are a multi-objective
-fit that penalizes deviations of predicted SPC and lag-CRP from
-observed, and a Bayesian prior on $(w_G, w_S)$ that regularizes $w_G$
-away from the boundary. Both are out of scope for the present paper
-and are natural targets for future work.
+What the fit does \emph{not} establish is that MS-TCM is preferred
+over a strong CMR-style alternative that also has a source sub-region.
+The FRFR-category design has a category structure that either a
+source-augmented CMR or a storyline-augmented MS-TCM can exploit;
+distinguishing the two requires stimuli whose storyline variable
+really does freeze between events, which the category-structured
+free-recall paradigm does not provide. A direct test of the
+frozen-while-inactive hypothesis therefore waits on the
+\citet{XuDuncanManning} cued-recall data.
 
 \paragraph{Caveats specific to the worked example.}
 Three caveats are worth flagging. \textbf{(1)} FRFR-category is a
