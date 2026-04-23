@@ -45,6 +45,19 @@ from ms_tcm.params import ModelParameters
 _ENCODING_CACHE: "dict[tuple[int, ModelParameters], EncodingState]" = {}
 _ENCODING_CACHE_CAP = 64
 
+# Per-dataset cache of the enumerated (participant, list, recalled_df) triples.
+# Profiling showed ``Dataset.iter_lists`` was ~43% of total fit wall-clock
+# because it did ``presented.to_pandas()`` + pandas boolean indexing +
+# ``pa.Table.from_pandas`` for every list on every likelihood evaluation.
+# With ~48 lists × 424 optimizer evaluations this is ~20k redundant pandas
+# conversions. We cache the per-list slices on first access and return
+# (participant, list_, recalled_df) tuples directly; the pandas DataFrame
+# form avoids the pyarrow round-trip that ``iter_lists`` otherwise does.
+# Keyed by ``id(dataset)`` because the Dataset is a frozen dataclass whose
+# Parquet-backed tables are immutable within a process lifetime.
+_LIST_CACHE: "dict[int, list[tuple[int, int, pd.DataFrame]]]" = {}
+_LIST_CACHE_CAP = 8
+
 
 def _cached_encode(
     model: HierarchicalCMRModel, dataset: Dataset,
@@ -76,6 +89,48 @@ def _cached_encode(
 def clear_encoding_cache() -> None:
     """Clear the module-level encoding cache (used by tests to avoid cross-talk)."""
     _ENCODING_CACHE.clear()
+    _LIST_CACHE.clear()
+
+
+def _cached_iter_lists(dataset: Dataset) -> list[tuple[int, int, pd.DataFrame]]:
+    """Return a cached list of ``(participant, list_, recalled_df)`` triples.
+
+    Computes the per-list slicing once per Dataset identity and reuses it
+    across every likelihood evaluation. Profiling showed this is the single
+    largest Tier-1 hot spot: ~43% of fit wall-clock was spent in
+    ``Dataset.iter_lists`` doing repeated ``presented.to_pandas()`` +
+    pandas boolean indexing + ``pa.Table.from_pandas`` conversions.
+
+    We only need the recalled-DF per list (the presented side is already
+    covered by the EncodingState's cached per-list structures). Returning
+    pandas DataFrames (not pyarrow Tables) lets ``list_log_likelihood``
+    skip the costly pyarrow → pandas conversion that was happening per-call.
+    """
+    key = id(dataset)
+    cached = _LIST_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    rdf = dataset.recalled.to_pandas()
+    pdf = dataset.presented.to_pandas()
+    # Enumerate unique (participant, list_) pairs exactly once.
+    keys = sorted(set(zip(pdf["participant"].tolist(), pdf["list"].tolist())))
+    # Group recalled rows by (participant, list_) once using pandas groupby;
+    # each group becomes a DataFrame we can reuse across fits.
+    grouped = rdf.groupby(["participant", "list"], sort=False)
+    triples: list[tuple[int, int, pd.DataFrame]] = []
+    for p, l in keys:
+        if (p, l) in grouped.groups:
+            rec_sub = grouped.get_group((p, l)).sort_values("output_position").reset_index(drop=True)
+        else:
+            rec_sub = rdf.iloc[0:0]  # empty DataFrame with correct schema
+        triples.append((int(p), int(l), rec_sub))
+
+    _LIST_CACHE[key] = triples
+    # Bound memory across many Dataset instances.
+    if len(_LIST_CACHE) > _LIST_CACHE_CAP:
+        _LIST_CACHE.pop(next(iter(_LIST_CACHE)))
+    return triples
 
 
 @dataclass(frozen=True)
@@ -107,8 +162,16 @@ def list_log_likelihood(
     c_ret: np.ndarray | None = None
     recalled_sps: set[int] = set()
     prev_sp: int | None = None
-    for _, row in rec_df.sort_values("output_position").iterrows():
-        sp = int(row["serial_position"])
+    # Extract the recall column as a numpy int array once — avoids pandas
+    # iterrows overhead (another Tier-1 hot path). When the caller is
+    # ``dataset_log_likelihood`` the DF is already sorted by
+    # ``_cached_iter_lists``; guard with a stable sort otherwise.
+    if "output_position" in rec_df.columns:
+        if not rec_df["output_position"].is_monotonic_increasing:
+            rec_df = rec_df.sort_values("output_position")
+    sp_array = rec_df["serial_position"].to_numpy(dtype=np.int64)
+    for sp_value in sp_array:
+        sp = int(sp_value)
         if sp == 0:
             continue  # extra-list intrusion
         if sp in recalled_sps:
@@ -168,17 +231,25 @@ def dataset_log_likelihood(
 ) -> float:
     """Sum of list_log_likelihood across every (participant, list).
 
-    Uses the module-level encoding cache so that repeated calls with the
-    same ``(dataset, parameters)`` identity (e.g. the L-BFGS-B optimizer
-    evaluating the objective multiple times at the same point for finite
-    differencing) skip the expensive ``encode`` step (FR-030 Tier 1).
+    Uses two module-level caches for Tier-1 performance:
+
+    1. ``_ENCODING_CACHE`` — skips ``HierarchicalCMRModel.encode`` when the
+       optimizer reevaluates the same (dataset, parameters) combination
+       (e.g. L-BFGS-B finite-difference probing).
+    2. ``_LIST_CACHE`` — skips ``Dataset.iter_lists``' repeated pandas
+       ↔ pyarrow conversions. Profiling showed ``iter_lists`` accounted
+       for ~43% of fit wall-clock in the pre-cache Tier-1 path; caching
+       the per-list recalled-DF slices brings this close to zero.
     """
     model = HierarchicalCMRModel(parameters)
     state = _cached_encode(model, dataset)
     total = 0.0
-    for part, lst, pres_sub, rec_sub in dataset.iter_lists():
+    for part, lst, rec_sub in _cached_iter_lists(dataset):
+        # ``rec_sub`` is already a pandas DataFrame sorted by output_position
+        # (see ``_cached_iter_lists``), so ``list_log_likelihood`` skips the
+        # pa.Table → DataFrame conversion that was happening per-call.
         contrib = list_log_likelihood(
-            pres_sub, rec_sub, parameters, state, part, lst,
+            None, rec_sub, parameters, state, part, lst,
         )
         if not np.isfinite(contrib):
             return float("-inf")
