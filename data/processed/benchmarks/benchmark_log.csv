@@ -1,2 +1,3 @@
 timestamp,git_sha,platform,tier,dtype,n_participants,n_bootstraps,n_restarts,seed,wall_clock_seconds,peak_memory_mb
 2026-04-23T07:58:57.755337+00:00,ac5fb5b,macos,tier1,float64,30,20,1,42,560.3983565839007,1299.703125
+2026-04-23T12:04:51.261856+00:00,1713f64,macos,tier1,float64,30,5,1,42,323.8114312081598,1297.6875

@@ -175,19 +175,35 @@ def _cmd_fit(args: argparse.Namespace) -> int:
             )
             return 2
 
-    from ms_tcm.bootstrap import bootstrap_ci
     from ms_tcm.dataset import load_dataset
-
     ds = load_dataset(path)
-    fit = bootstrap_ci(
-        ds,
-        n_bootstraps=int(args.n_bootstraps),
-        seed=int(args.seed),
-        n_restarts=int(args.n_restarts),
-        standard_tcm=bool(args.standard_tcm),
-        paradigm=str(args.paradigm),
-        n_processes=args.n_processes,
-    )
+
+    if backend == "jax":
+        # Tier 2 (JAX): single MLE via the JAX-native likelihood + analytic
+        # gradients. Bootstrap CI is not supported on the Tier-2 path in this
+        # feature (JAX traced arrays don't traverse process boundaries cleanly);
+        # callers that need bootstrap CIs should use --backend tier1. --backend
+        # jax is a fast-iteration tool for point-MLE sweeps.
+        os.environ["MS_TCM_JAX_DTYPE"] = _resolve_jax_dtype(args)
+        from ms_tcm.jax_backend.fit_jax import fit_mle_jax
+        fit = fit_mle_jax(
+            ds,
+            n_restarts=int(args.n_restarts),
+            seed=int(args.seed),
+            standard_tcm=bool(args.standard_tcm),
+            paradigm=str(args.paradigm),
+        )
+    else:
+        from ms_tcm.bootstrap import bootstrap_ci
+        fit = bootstrap_ci(
+            ds,
+            n_bootstraps=int(args.n_bootstraps),
+            seed=int(args.seed),
+            n_restarts=int(args.n_restarts),
+            standard_tcm=bool(args.standard_tcm),
+            paradigm=str(args.paradigm),
+            n_processes=args.n_processes,
+        )
     _write_fit_outputs(fit, Path(args.out))
     print(json.dumps({
         "ok": True,

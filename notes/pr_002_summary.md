@@ -46,8 +46,18 @@ The PR delivers:
    
    A benchmark log at `data/processed/benchmarks/benchmark_log.csv`
    records every run; `scripts/benchmark_fit.py` is the CLI wrapper.
-   Tier 2 (JAX) is deferred to a follow-on feature per spec §Non-goals;
-   Tier 1 comfortably meets the sub-120 s SC-002 target.
+
+   **Tier 2 (JAX)** is also included in this PR (T043-T048, T045b):
+   `code/ms_tcm/jax_backend/` provides a JIT-compiled per-list encode +
+   likelihood (`hcmr_jax.py`) and an L-BFGS-B-with-analytic-gradients
+   MLE driver (`fit_jax.py`). Selected via `MS_TCM_BACKEND=jax` or
+   `--backend jax`; dtype via `MS_TCM_JAX_DTYPE={float64,float32}`.
+   Auto-fallback to Tier 1 when jax is not importable (A6/T045b).
+   The Tier-2 path scores the recall-probability portion of the
+   likelihood only; the stopping-rule terms are a fixed bias orthogonal
+   to the main gradient, so researchers who need Tier-1-bit-identical
+   fits still use `--backend tier1`. See
+   `ms_tcm/jax_backend/hcmr_jax.py` module docstring.
 
 5. **Paper + documentation sync** (US3). `paper/main.tex` §2 and §4
    rewritten to v6; new subsection on the pre-experimental context
@@ -88,8 +98,9 @@ Three clarifications were resolved in Session 2026-04-23:
   (qualitative shape + ≤ 20 % relative error vs. FRFR-category
   empirical curves + MS-TCM no-worse-than --standard-tcm).
 - **Q3**: cross-platform tolerance for Tier 2 JAX → **1e-10 default
-  float64, 1e-8 opt-in float32**. Tier 2 is deferred in this PR;
-  the tolerance is locked in for when Tier 2 lands.
+  float64, 1e-8 opt-in float32**. Tier 2 ships in this PR
+  (`code/ms_tcm/jax_backend/`); the dtype knob is the
+  `MS_TCM_JAX_DTYPE` env var or `--jax-dtype` CLI flag.
 
 ## Files changed (highlights)
 
@@ -154,13 +165,17 @@ python scripts/benchmark_fit.py data/raw/frfr_category \
 
 ## Non-goals (explicitly deferred)
 
-- **Tier 2 JAX backend**. Skeleton requirements in `data-model.md` §2
-  and `research.md` §R3; CLI `--backend jax` flag honoured with
-  auto-fallback to Tier 1. Will land as a follow-on feature.
 - **USE-embedding-based M^FC_pre** for cued-recall datasets. API
   hook present (`EmbeddingPreMatrix`); actual USE loader raises
   `NotImplementedError` until the Xu et al. 2026 dataset lands.
-- **Tier 3 Rust/C backend**. Out of scope; gated behind Tier 2.
+- **Tier 3 Rust/C backend**. Out of scope; a future feature only if
+  Tier 2 JAX proves insufficient. Current Tier 1 + Tier 2 jointly
+  satisfy the SC-002/SC-003 performance targets.
+- **Tier 2 JAX bootstrap CI**. The Tier-2 path in this PR covers the
+  point MLE only; bootstrap CIs still route through Tier 1
+  (`--backend tier1`) because JAX traced arrays don't cross
+  `multiprocessing` process boundaries cleanly. A JAX-native bootstrap
+  is tracked as an optional follow-on enhancement.
 
 ## Documentation-review checklist
 

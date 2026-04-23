@@ -39,3 +39,27 @@ jobs:
         run: python -c "import json; s=json.load(open('runs/ci/mstcm/fit_summary.json')); [print(n, ':', info['mle']) for n, info in s['parameters'].items()]"
       - name: Cross-platform fixture (T053)
         run: pytest code/tests/test_cross_platform.py -q -m slow
+
+  jax:
+    name: Tier 2 JAX (${{ matrix.dtype }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dtype: [float64, float32]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install with [jax] extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,jax]"
+      - name: Run JAX backend tests
+        env:
+          MS_TCM_JAX_DTYPE: ${{ matrix.dtype }}
+        run: pytest code/tests/test_jax_backend.py -v -m "slow or not slow"

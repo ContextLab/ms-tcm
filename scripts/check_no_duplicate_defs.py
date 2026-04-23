@@ -29,6 +29,12 @@ def _top_level_names(source: str) -> set[str]:
     names: set[str] = set()
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            # Exempt Python protocol dunders (``__getattr__``, ``__init_subclass__``,
+            # etc.) used at module level for lazy imports and similar. These
+            # are Python-protocol hooks, not project business logic — every
+            # package legitimately has its own.
+            if node.name.startswith("__") and node.name.endswith("__"):
+                continue
             names.add(node.name)
     return names
 
