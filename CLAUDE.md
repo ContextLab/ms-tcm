@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan at
-[specs/001-ms-tcm-impl/plan.md](specs/001-ms-tcm-impl/plan.md).
+[specs/002-ms-tcm-v6-hcmr/plan.md](specs/002-ms-tcm-v6-hcmr/plan.md).
 <!-- SPECKIT END -->
 
 ## Project
