@@ -134,14 +134,22 @@ def benchmark_fit(
 
     tier_label, backend, dtype = _normalize_tier(tier, jax_dtype=jax_dtype)
     if backend == "jax":
-        # Tier 2 JAX path is deferred per spec §Non-goals; honor the auto-fallback.
+        # A6 auto-fallback: if JAX is requested but unavailable, drop to
+        # Tier 1 with an explicit warning (no silent fallback per FR-064).
         try:
             import jax  # noqa: F401
         except Exception:
-            # Auto-fallback to Tier 1 (A6 resolution in spec).
+            import warnings
+            warnings.warn(
+                "JAX backend requested but `jax` is not importable; "
+                "falling back to Tier 1. Install with `pip install -e .[jax]`."
+            )
             tier_label = "tier1"
             backend = "tier1"
             dtype = "float64"
+        else:
+            # Export the requested dtype to the JAX backend before it's imported.
+            os.environ["MS_TCM_JAX_DTYPE"] = dtype
 
     n_participants = int(
         len(set(ds.presented.to_pandas()["participant"].tolist()))
@@ -155,14 +163,22 @@ def benchmark_fit(
             n_restarts=n_restarts, standard_tcm=standard_tcm,
             paradigm=paradigm, n_processes=n_processes,
         )
-    else:
-        # Tier 2 JAX backend: not implemented in this feature's 002 window.
-        # Fall back to Tier 1 (see auto-fallback clause above).
-        fit = bootstrap_ci(
-            ds, n_bootstraps=n_bootstraps, seed=seed,
-            n_restarts=n_restarts, standard_tcm=standard_tcm,
-            paradigm=paradigm, n_processes=n_processes,
+    elif backend == "jax":
+        # Tier 2 JAX path (feature 002 ships this). The JAX backend runs a
+        # point-MLE with analytic gradients; bootstrap CIs are not supported
+        # on the Tier-2 path (JAX traced arrays don't cross multiprocessing
+        # boundaries cleanly — documented in notes/pr_002_summary.md
+        # §Non-goals). The `n_bootstraps` parameter is recorded in the
+        # benchmark log for comparability but does not expand the fit.
+        from ms_tcm.jax_backend.fit_jax import fit_mle_jax
+        fit = fit_mle_jax(
+            ds, n_restarts=n_restarts, seed=seed,
+            standard_tcm=standard_tcm, paradigm=paradigm,
         )
+    else:
+        # Should be unreachable after _normalize_tier; raise rather than
+        # silently running Tier 1 (FR-064: no silent fallbacks).
+        raise ValueError(f"unknown backend {backend!r}")
     wall = float(time.perf_counter() - t0)
     peak_mb = _peak_memory_mb()
 

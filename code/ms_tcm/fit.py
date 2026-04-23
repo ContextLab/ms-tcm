@@ -181,9 +181,12 @@ def fit_mle(
     default_params = ModelParameters(paradigm=paradigm, feature_dim=feature_dim)
     theta_init = _theta_from_params(default_params)
     n_theta = len(theta_init)
-    if standard_tcm:
-        # lambda_reinstate fixed at 0; don't optimize over it.
-        pass  # keep all dims — we'll zero-out the relevant gradient via standard_tcm flag
+    # Under --standard-tcm the lambda_reinstate coordinate is pinned to 0 via
+    # ``_params_from_theta`` (not by changing n_theta here). The optimizer
+    # will still vary theta[4], but _params_from_theta overrides it with 0.0
+    # before constructing ModelParameters, so the objective is flat in that
+    # direction and L-BFGS-B converges cleanly. This matches the FR-011
+    # reduction semantics and is verified by test_hcmr_standard_tcm.
 
     rng = np.random.default_rng(seed)
     best_nll = np.inf

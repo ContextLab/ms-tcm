@@ -10,12 +10,12 @@ Deterministic-equivalence to the serial path is verified by
 ``test_bootstrap.py::test_parallel_matches_serial_same_seed``.
 
 .. note::
-    Tier 2 JAX backend is tracked as a follow-on feature (spec §Non-goals
-    explicitly permits the deferral). Tier 1 multiprocessing already
-    achieves the sub-120s SC-002 target on FRFR-category; the extra
-    complexity of a JAX-native ``encode`` + ``vmap`` is not needed to
-    unblock User Story 2. When revisited, see ``code/ms_tcm/jax_backend/``
-    skeleton requirements in data-model.md §2 and research.md R3.
+    Tier 2 JAX backend ships in feature 002 alongside Tier 1
+    (``code/ms_tcm/jax_backend/``). The JAX path currently supports the
+    point-MLE only; bootstrap CIs route through the Tier-1 multiprocess
+    path in this module because JAX traced arrays don't cross
+    multiprocessing boundaries cleanly (documented in
+    ``notes/pr_002_summary.md`` §Non-goals).
 """
 
 from __future__ import annotations
