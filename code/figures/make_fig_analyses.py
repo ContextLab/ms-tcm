@@ -21,7 +21,7 @@ from ms_tcm import Dataset, load_frfr_category
 # code/analyses/. Put code/ on sys.path so the `analyses` package is
 # importable without requiring code/ to be a Python package itself.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from analyses import lag_crp, pfr, serial_position  # noqa: E402
+from analyses import lag_crp, pfr, spc as serial_position  # noqa: E402
 from analyses.predicted import (  # noqa: E402
     compute_band, draw_synthetic_datasets, params_from_fit_summary,
 )

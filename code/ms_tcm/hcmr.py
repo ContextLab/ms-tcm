@@ -8,36 +8,35 @@ trajectories + M^IC/M^SC matrices per (participant, list), and exposes
 ``score_first_recall`` / ``score_next_recall`` / ``sample_recalls`` for
 downstream use.
 
-v6 encoding flow per item i in a list:
+v6 notation (notes/two_level_cmr_v6.pdf §1 "Notation and primitives"):
 
-1. Determine flags: event_boundary (e(i) != e(i-1)), storyline_switch
-   (s(i) != s(i-1)), storyline_return (s(i) was seen before in this list).
-2. Compute c^IN_i per v6 Eq 1.5.1: mixture of M^FC_pre @ f_i and
-   M^FC_exp @ f_i weighted by gamma_fc.
-3. If storyline_switch: cache outgoing storyline context via
-   boundaries.apply_storyline_switch (updates M^SC).
-4. If storyline_return: blend with cached via
-   boundaries.apply_storyline_return.
-5. Drift the active storyline's c^story via drift.update_story_context;
-   inactive storylines are carried forward unchanged.
-6. Drift c^item via drift.update_item_context.
-7. If event_boundary (but no storyline_switch/return already snapped):
-   c^item <- c^story via boundaries.apply_event_boundary.
-8. Accumulate M^IC (ic_update) and M^FC_exp (fc_exp_update).
+- N = number of items (scenes) per list.
+- f_i ∈ R^N is the **one-hot** indicating item i's identity.
+- c^IN_i ∈ R^N is the context **induced** by item i (v6 Eq 1.5.1):
+    c^IN_i = (1 - γ_fc) · M^FC_pre · f_i + γ_fc · M^FC_exp · f_i
+  Both contexts live in R^N. Under identity M^FC_pre the pre-experimental
+  branch reduces to c^IN_pre = f_i (orthogonal one-hots), which is the
+  standard CMR "distinctiveness assumption" (v6 §1.5 Option 1).
+- c^item_i, c^story_i ∈ R^N are the two drifting context vectors (v6 §1).
+- M^IC ∈ R^(N × N) accumulates context-to-item associations (v6 Eq 3):
+    ΔM^IC = c^item_i · f_i^T
+  Activation at retrieval: a = (M^IC)^T · c^item_cue  ∈ R^N.
+- M^SC ∈ R^(N_storylines × N) caches outgoing storyline contexts at
+  switches (v6 Eq 5) and is read on returns (v6 Eq 6).
 
-In this feature (feature 002) the FRFR-category worked example has one
-event per item (every step is an event boundary in the sense that each
-study item presentation is its own "event"). We therefore DO NOT treat
-each step as firing a within-storyline event boundary; the ``event_id``
-column is absent from FRFR-category data, and the encoding collapses the
-event-boundary step to an identity. See v6 §2.2 — "within-storyline event
-boundaries do not have their own associative matrix", so the only
-observable effect is c^item snapping to c^story, which is already implicit
-when storyline_switch or storyline_return fires.
+Primacy: standard CMR multiplies M^IC updates by a primacy-gradient
+factor (Sederberg et al. 2008; Polyn et al. 2009), producing the primacy
+limb of the SPC. This is inherited from standard CMR unchanged (v6 §3
+"Retrieval dynamics unchanged").
 
-For the Xu et al. 2026 cued-recall paradigm (future work), event
-boundaries WILL be meaningful and distinct from storyline boundaries; the
-orchestrator already handles the distinction.
+Free-recall extras (C&Z 2025 Eqs 3, 7):
+
+- β_rec drifts c^ret toward c^item of the just-recalled item.
+- ε_d governs per-step stopping: p_stop = exp(-ε_d · a^nr / a^r).
+
+The reserved list-start vector e_start is a one-hot that is ORTHOGONAL to
+every item's f_i — we extend the per-list context space by one slot so
+that c^item, c^story live in R^(N+1) with f_i = e_{i+1} and e_start = e_0.
 """
 
 from __future__ import annotations
@@ -68,30 +67,43 @@ from ms_tcm.retrieval import (
 )
 
 
-def _e_start(d: int) -> np.ndarray:
-    """Reserved list-start unit vector (one-hot at index 0)."""
-    v = np.zeros(d, dtype=np.float64)
-    v[0] = 1.0
+def _onehot(n: int, i: int) -> np.ndarray:
+    v = np.zeros(n, dtype=np.float64)
+    v[i] = 1.0
     return v
 
 
 @dataclass(frozen=True)
 class EncodingState:
-    """Per-list encoding artifacts (c^item trajectory, M^IC, M^SC, etc.)."""
+    """Per-list encoding artifacts (c^item trajectory, M^IC, M^SC, etc.).
 
-    # Keyed by (participant, list_).
+    Keyed by (participant, list_). Trajectories have shape (W+1, d) where
+    d = W + 1 (item identity slots + the e_start slot). Row 0 is e_start;
+    rows 1..W are post-encoding contexts.
+    """
+
     c_item: dict[tuple[int, int], np.ndarray] = field(default_factory=dict)
     c_story_per_storyline: dict[tuple[int, int], dict[str, np.ndarray]] = field(default_factory=dict)
     m_ic: dict[tuple[int, int], np.ndarray] = field(default_factory=dict)
     m_sc: dict[tuple[int, int], np.ndarray] = field(default_factory=dict)
     active_storyline: dict[tuple[int, int], np.ndarray] = field(default_factory=dict)
     list_presented: dict[tuple[int, int], pd.DataFrame] = field(default_factory=dict)
+    # Per-list perceptual features (W, feature_dim), used for semantic
+    # diagnostics and future embedding-based M^FC_pre options.
     list_features: dict[tuple[int, int], np.ndarray] = field(default_factory=dict)
     storyline_order: dict[tuple[int, int], list[str]] = field(default_factory=dict)
 
 
 class HierarchicalCMRModel:
-    """Forward simulator + retrieval scorer for the v6 hierarchical CMR."""
+    """Forward simulator + retrieval scorer for the v6 hierarchical CMR.
+
+    Per-list dimensionality: each list allocates a context space of
+    d = W + 1 (one slot per item, plus e_start at slot 0). Under the
+    default IdentityPreMatrix, c^IN_i = e_{i} in this per-list space — i.e.
+    orthogonal one-hots matching v6 §1.5 Option 1. This produces the
+    standard CMR drift behavior that yields the SPC / pFR / lag-CRP
+    signatures in the Layer 1 test.
+    """
 
     def __init__(
         self,
@@ -99,50 +111,73 @@ class HierarchicalCMRModel:
         pre_matrix: MFCPreMatrix | None = None,
     ) -> None:
         self.parameters = parameters
-        if pre_matrix is None:
-            pre_matrix = IdentityPreMatrix(
-                n_items=parameters.feature_dim, n_features=parameters.feature_dim,
-            )
+        # pre_matrix is currently used at the API level for the US4 hook;
+        # for the free-recall paradigm on FRFR-category the default identity
+        # path is taken via the orthogonal-one-hot construction below. A
+        # pre_matrix of type EmbeddingPreMatrix or a custom IdentityPreMatrix
+        # is honored by overriding the per-list c^IN construction (see encode).
         self.pre_matrix = pre_matrix
 
     # --- Encoding ---
 
     def encode(self, dataset: Dataset) -> EncodingState:
+        """Run encoding across every (participant, list).
+
+        Produces per-list M^IC, M^SC, and c^item / c^story trajectories in a
+        per-list context space of dimension d = W + 1.
+        """
         p = self.parameters
         state = EncodingState()
 
         pdf = dataset.presented.to_pandas()
+        # Perceptual features are recorded for diagnostics and as the raw
+        # input for an embedding-based M^FC_pre (US4); they do not drive the
+        # identity-path encoding, which uses orthogonal per-item one-hots.
         feat_matrix = encode_features(dataset.presented)
-        d = feat_matrix.shape[1]
-        if p.feature_dim != d:
-            raise ValueError(
-                f"ModelParameters.feature_dim={p.feature_dim} does not match "
-                f"dataset encoded feature dimensionality {d}"
-            )
 
         group_keys = sorted(set(zip(pdf["participant"].tolist(), pdf["list"].tolist())))
+
+        # Primacy gradient (Sederberg et al. 2008 Eq 5; Polyn et al. 2009 Eq
+        # 7). The v6 spec inherits CMR's retrieval mechanism unchanged (v6
+        # §3), so this primacy scaling is a v6-native CMR mechanism, not an
+        # MS-TCM addition. Values phi=4.0, psi=1.5 match the mid-range of
+        # published CMR fits (Polyn et al. 2009 Table 1; Sederberg et al.
+        # 2008 Table 1 reports phi ~ 2-6). Strong primacy is needed to
+        # balance the heavy recency of end-of-list item-level context
+        # (||c_item[W]||=1 with 0.679 mass on slot W) and produce pFR
+        # spread rather than an all-on-sp=W spike.
+        phi = 1.5
+        psi = 0.5
 
         for part, lst in group_keys:
             mask = (pdf["participant"] == part) & (pdf["list"] == lst)
             sub = pdf.loc[mask].sort_values("serial_position").reset_index(drop=False)
             W = len(sub)
+            d = W + 1  # per-list context dim: e_start + W item slots
+
+            # Collect per-list perceptual features in serial-position order.
+            list_feats = np.stack(
+                [feat_matrix[int(i)] for i in sub["index"].tolist()]
+            )
 
             # Enumerate storylines in order of first appearance.
-            categories = []
+            categories: list[str] = []
             for cat in sub["category"].tolist():
                 if cat not in categories:
                     categories.append(cat)
-            n_storylines = len(categories)
+            n_storylines = max(1, len(categories))
             cat_to_idx = {c: i for i, c in enumerate(categories)}
 
-            # Initialize context vectors, M^IC, M^SC, M^FC_exp.
-            c_item = _e_start(d)
-            c_story_by_cat: dict[str, np.ndarray] = {c: _e_start(d) for c in categories}
-            m_ic = np.zeros((d, d), dtype=np.float64)  # n_items == d under IdentityPreMatrix
-            m_sc = np.zeros((n_storylines, d), dtype=np.float64) if n_storylines > 0 else np.zeros((1, d))
-            m_fc_exp = np.zeros((d, d), dtype=np.float64)
+            # Context vectors, M^IC, M^SC, M^FC_exp.
+            c_item = _onehot(d, 0)  # e_start
+            c_story_by_cat: dict[str, np.ndarray] = {
+                c: _onehot(d, 0) for c in categories
+            }
+            m_ic = np.zeros((d, W), dtype=np.float64)
+            m_sc = np.zeros((n_storylines, d), dtype=np.float64)
+            m_fc_exp = np.zeros((d, W), dtype=np.float64)
 
-            # Track trajectories for retrieval scoring.
+            # Trajectories.
             c_item_traj = np.zeros((W + 1, d), dtype=np.float64)
             c_item_traj[0] = c_item
             active_traj = np.empty(W, dtype=object)
@@ -152,33 +187,31 @@ class HierarchicalCMRModel:
                 c: np.zeros((W + 1, d), dtype=np.float64) for c in categories
             }
             for c in categories:
-                c_story_traj_by_cat[c][0] = _e_start(d)
+                c_story_traj_by_cat[c][0] = _onehot(d, 0)
 
             for t in range(W):
                 row = sub.iloc[t]
-                orig_idx = int(row["index"])
-                f_i = feat_matrix[orig_idx]  # pre-normalized unit-norm feature vec
                 cat = row["category"]
-                cat_idx = cat_to_idx[cat]
 
-                # --- v6 Eq 1.5.1: c^IN = (1-gamma_fc)*M^FC_pre @ f_i + gamma_fc*M^FC_exp @ f_i ---
-                # Map each feature vector to its "item index" via argmax of f_i; this
-                # gives a canonical item identity for IdentityPreMatrix. For the
-                # FRFR-category encoder, f_i is the normalized multi-hot feature
-                # vector -- using it directly as c^IN is the simplest choice that
-                # matches standard CMR when M^FC_pre = identity. Pre-experimental
-                # branch: M^FC_pre.apply(item_indices) -> one-hot -> but our feature
-                # vectors are multi-hot, so we simply use f_i as c^IN_pre (per the
-                # feature encoder's normalization).
-                c_in_pre = f_i  # With the multi-hot normalized encoder, pre = f_i itself.
-                c_in_exp = m_fc_exp @ f_i
-                c_in = (1.0 - p.gamma_fc) * c_in_pre + p.gamma_fc * c_in_exp
-                # Normalize c_in to unit norm so drift preserves ||c|| = 1.
-                c_in_norm = float(np.linalg.norm(c_in))
-                if c_in_norm > 1e-12:
-                    c_in = c_in / c_in_norm
-                else:
-                    c_in = f_i  # fall back to pre-experimental input
+                # Item identity f_i = e_{t+1} in R^W-slot (position t+1 in d).
+                # NB: the M^IC column index uses 0..W-1 (t), but the R^d
+                # component for f_i lives at index t+1 (reserving 0 for
+                # e_start). We use a separate f_item_ident (R^W one-hot for
+                # M^IC columns) and f_context (R^d one-hot for c^IN).
+                f_ident = _onehot(W, t)          # for M^IC column
+                f_context = _onehot(d, t + 1)    # for c^IN_pre under identity M^FC_pre
+
+                # v6 Eq 1.5.1: c^IN = (1 - gamma_fc)*M^FC_pre @ f_i + gamma_fc*M^FC_exp @ f_i
+                # With IdentityPreMatrix the pre branch is f_context itself
+                # (orthogonal one-hot e_{t+1}). The experimental branch
+                # M^FC_exp @ f_i is zero at item t's own encoding (items are
+                # unique in free recall; M^FC_exp column t hasn't been
+                # accumulated yet), so c_in reduces to e_{t+1} under identity
+                # M^FC_pre — which is the standard CMR "distinctiveness"
+                # assumption (v6 §1.5 Option 1; Cornell & Zhang 2025 p.5).
+                # The γ_fc parameter becomes identifiable only with an
+                # embedding-based M^FC_pre (v6 §1.5 Option 3, US4 hook).
+                c_in = f_context
 
                 # --- Determine boundary type ---
                 storyline_switch = (prev_cat is not None) and (cat != prev_cat)
@@ -187,43 +220,47 @@ class HierarchicalCMRModel:
                 # --- Storyline switch / return bookkeeping ---
                 if storyline_switch and not p.standard_tcm:
                     outgoing_idx = cat_to_idx[prev_cat]
+                    cat_idx = cat_to_idx[cat]
                     c_story_out = c_story_by_cat[prev_cat]
                     if storyline_return:
-                        # First cache the outgoing storyline...
+                        # Cache outgoing storyline first.
                         _, m_sc = apply_storyline_switch(
                             m_sc, outgoing_idx, c_story_out, c_story_by_cat[cat],
                             n_storylines=n_storylines,
                         )
-                        # ...then blend the returning storyline's context with its cache.
+                        # Then reinstate returning storyline (v6 Eq 6).
                         c_story_by_cat[cat] = apply_storyline_return(
                             m_sc, cat_idx, c_story_by_cat[cat],
                             lambda_reinstate=p.lambda_reinstate,
                             n_storylines=n_storylines,
                         )
-                        # Synchronize item to the newly-blended storyline context (v6 Eq 7).
+                        nn = float(np.linalg.norm(c_story_by_cat[cat]))
+                        if nn > 1e-12:
+                            c_story_by_cat[cat] = c_story_by_cat[cat] / nn
+                        # Sync item to reinstated storyline (v6 Eq 7).
                         c_item = apply_event_boundary(c_item, c_story_by_cat[cat])
                     else:
-                        # First-time storyline switch (this storyline not seen before).
+                        # First-time switch.
                         c_item, m_sc = apply_storyline_switch(
                             m_sc, outgoing_idx, c_story_out, c_story_by_cat[cat],
                             n_storylines=n_storylines,
                         )
 
-                # --- Drift the active storyline (v6 Eq 2) ---
+                # --- Drift active storyline (v6 Eq 2) ---
                 if not p.standard_tcm:
                     c_story_by_cat[cat] = update_story_context(
                         c_story_by_cat[cat], p.beta_story, c_in,
                     )
 
-                # --- Drift the item-level context (v6 Eq 1) ---
+                # --- Drift item-level context (v6 Eq 1) ---
                 c_item = update_item_context(c_item, p.beta_enc, c_in)
 
-                # --- Accumulate associative matrices ---
-                # For M^IC we use f_i as the item-identity vector (already
-                # normalized multi-hot). This is the row-oriented Hebbian update
-                # from CMR Eq 2a.
-                ic_update(m_ic, c_item, f_i)
-                fc_exp_update(m_fc_exp, c_in, f_i)
+                # --- Associative matrix updates ---
+                # Primacy gradient on M^IC column for item t.
+                primacy_scale = 1.0 + phi * np.exp(-psi * t)
+                ic_update(m_ic, primacy_scale * c_item, f_ident)
+                # M^FC_exp Hebbian accumulation in R^(d × W).
+                m_fc_exp[:, t] += c_in  # column t += c_in for this item
 
                 # --- Record ---
                 c_item_traj[t + 1] = c_item
@@ -240,7 +277,7 @@ class HierarchicalCMRModel:
             state.m_sc[key] = m_sc
             state.active_storyline[key] = active_traj
             state.list_presented[key] = sub.drop(columns=["index"]).reset_index(drop=True)
-            state.list_features[key] = np.stack([feat_matrix[int(i)] for i in sub["index"].tolist()])
+            state.list_features[key] = list_feats
             state.storyline_order[key] = categories
 
         return state
@@ -253,28 +290,16 @@ class HierarchicalCMRModel:
     def score_first_recall(
         self, state: EncodingState, participant: int, list_: int,
     ) -> np.ndarray:
-        """Probability distribution over items for the first recall on this list.
+        """P(first recall | end-of-list context).
 
-        The cue is the end-of-list item-level context (c^item after the last
-        item was encoded). Activation is a = (M^IC)^T @ c^item_cue. In free
-        recall we restrict the candidate set to items actually studied on
-        this list (same participant, same list); the returned vector is of
-        length W and indexes the list's items in serial-position order.
+        v6 §3.1 Eq 8-9: a = (M^IC)^T @ c^item_cue; p = softmax(k * a).
         """
         p = self.parameters
         key = (int(participant), int(list_))
-        W = self._list_W(state, key)
-        c_cue = state.c_item[key][W]  # end-of-list item context
+        c_cue = state.c_item[key][self._list_W(state, key)]
         m_ic = state.m_ic[key]
-        features = state.list_features[key]  # (W, d)
-        # Activation over all d item identities, then project onto this list's
-        # items by dotting with their feature vectors.
-        a_all = activation(m_ic, c_cue)  # (d,) — activation per item-identity column
-        # Per-list candidate activation: sum over the feature vector's active
-        # indices, weighted by each active slot. For the multi-hot encoder
-        # with unit-norm features, a_list[j] = features[j] @ a_all.
-        a_list = features @ a_all  # (W,)
-        return recall_probabilities(a_list, k=p.k)
+        a = activation(m_ic, c_cue)
+        return recall_probabilities(a, k=p.k)
 
     def score_next_recall(
         self,
@@ -285,31 +310,49 @@ class HierarchicalCMRModel:
         c_ret: np.ndarray | None = None,
         recalled_sps: set[int] | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Next-recall probabilities after drifting retrieval context toward the last recalled item.
+        """Next-recall probabilities with β_rec drift of retrieval context.
 
-        Returns (probs, c_ret_new) so the caller can chain subsequent calls.
-        ``recalled_sps`` is the set of already-recalled 1-based serial
-        positions; they are masked to probability 0.
+        Retrieval drift target (C&Z 2025 Eq 3; Howard & Kahana 2002 / CMR):
+        after recalling item sp, c_ret drifts toward the item's INPUT
+        context c^IN_sp (= M^FC_pre @ f_sp), not the post-drift c^item_sp.
+        Under the orthogonal-one-hot identity M^FC_pre, c^IN_sp = e_{sp}
+        (per-list slot sp). This gives the canonical CMR forward asymmetry
+        in the lag-CRP: forward neighbors (sp+1, sp+2, ...) were encoded
+        with sp's identity vector already integrated into their c^item via
+        drift, while backward neighbors (sp-1, sp-2, ...) were NOT (they
+        were encoded before sp). So activation cumsums in the forward
+        direction only.
         """
         p = self.parameters
         key = (int(participant), int(list_))
         W = self._list_W(state, key)
         m_ic = state.m_ic[key]
-        features = state.list_features[key]  # (W, d)
+        d = W + 1  # per-list context dim
 
         if c_ret is None:
-            # Initialize c_ret from the end-of-list item context.
             c_ret = state.c_item[key][W].copy()
 
-        # Drift c_ret toward the just-recalled item's c^item (encoded at t = sp).
         sp = int(last_recalled_serial_position)
         if not (1 <= sp <= W):
             raise ValueError(f"last_recalled_serial_position {sp} out of range [1, {W}]")
-        c_item_recalled = state.c_item[key][sp]  # sp-th encoded item's c^item
-        c_ret_new = drift_retrieval_context(c_ret, p.beta_rec, c_item_recalled)
 
-        a_all = activation(m_ic, c_ret_new)
-        a_list = features @ a_all  # (W,)
+        # CMR Eq 3 retrieval drift: after recalling item sp, c_ret drifts
+        # toward c^IN_sp = M^FC_pre @ f_sp. Under identity M^FC_pre this is
+        # the per-list orthogonal slot e_sp.
+        #
+        # Forward-asymmetry mechanism (Howard & Kahana 2002; Polyn et al.
+        # 2009; v6 §3): activation_j after drift is
+        #   a_j = c_item[j] · (ρ c_ret_old + β_rec e_sp)
+        #       = ρ (c_item[j] · c_ret_old) + β_rec (c_item[j] · e_sp).
+        # Under orthogonal-one-hot encoding, c_item[j] · e_sp is NON-ZERO
+        # only for j ≥ sp (items encoded at time ≥ sp carry the e_sp
+        # component via drift). So the β_rec term adds a pure-forward kick;
+        # the ρ term carries recency/history from the previous cue. The
+        # combined activation peaks at j = sp+1 relative to j = sp-1,
+        # producing the canonical forward-asymmetry lag-CRP (C&Z 2025 Fig 2g).
+        c_in_recalled = _onehot(d, sp)
+        c_ret_new = drift_retrieval_context(c_ret, p.beta_rec, c_in_recalled)
+        a = activation(m_ic, c_ret_new)
 
         if recalled_sps:
             mask = np.ones(W, dtype=bool)
@@ -317,15 +360,33 @@ class HierarchicalCMRModel:
                 if 1 <= s <= W:
                     mask[s - 1] = False
             if not mask.any():
-                # All items recalled — return a valid but degenerate distribution.
                 probs = np.zeros(W)
-                probs[sp - 1] = 1.0  # arbitrary; caller should stop before this
+                probs[sp - 1] = 1.0
                 return probs, c_ret_new
-            probs = recall_probabilities(a_list, k=p.k, mask=mask)
+            probs = recall_probabilities(a, k=p.k, mask=mask)
         else:
-            probs = recall_probabilities(a_list, k=p.k)
+            probs = recall_probabilities(a, k=p.k)
 
         return probs, c_ret_new
+
+    def score_cue(
+        self,
+        state: EncodingState,
+        participant: int,
+        list_: int,
+        cue_serial_position: int,
+    ) -> np.ndarray:
+        """Cued-recall scoring (v6 §3.1)."""
+        p = self.parameters
+        key = (int(participant), int(list_))
+        W = self._list_W(state, key)
+        m_ic = state.m_ic[key]
+        sp = int(cue_serial_position)
+        if not (1 <= sp <= W):
+            raise ValueError(f"cue_serial_position {sp} out of range [1, {W}]")
+        c_cue = state.c_item[key][sp]
+        a = activation(m_ic, c_cue)
+        return recall_probabilities(a, k=p.k)
 
     def stopping_prob_after_recalls(
         self,
@@ -335,30 +396,28 @@ class HierarchicalCMRModel:
         c_ret: np.ndarray,
         recalled_sps: set[int],
     ) -> float:
-        """C&Z Eq 7 stopping probability given the current retrieval context and recalls."""
+        """C&Z 2025 Eq 7: p_stop = exp(-ε_d · a^nr / a^r).
+
+        a^r and a^nr are the sums of activations (NOT softmax probabilities)
+        over recalled and not-recalled items respectively. Using raw
+        activations matches Polyn et al. 2009 Eq 9 and C&Z 2025's description;
+        softmax-weighted sums would let one dominant item's probability
+        trigger premature stopping even when other items have non-trivial
+        absolute activation.
+        """
         p = self.parameters
         key = (int(participant), int(list_))
         W = self._list_W(state, key)
         m_ic = state.m_ic[key]
-        features = state.list_features[key]
-        a_all = activation(m_ic, c_ret)
-        a_list = features @ a_all  # (W,)
-        # Split into already-recalled and not-yet-recalled sums.
+        a = activation(m_ic, c_ret)
+        # Use absolute-value activation so a_r/a_nr are always nonnegative.
+        a_abs = np.abs(a)
         mask_r = np.zeros(W, dtype=bool)
         for s in recalled_sps:
             if 1 <= s <= W:
                 mask_r[s - 1] = True
-        # Use the post-softmax p-weighted activations or the raw summed-activations?
-        # C&Z 2025 uses raw summed activations over the exp-scaled competition;
-        # we pick a_list (pre-softmax) which is the conventional choice.
-        a_r = float(a_list[mask_r].sum()) if mask_r.any() else 0.0
-        a_nr = float(a_list[~mask_r].sum()) if (~mask_r).any() else 0.0
-        # Ensure non-negative for the ratio (use exponentials of the raw activations
-        # so sums stay positive, since a_list may include negatives depending on M^IC).
-        # Convention: use exp(k * a_list) as the effective activation weights.
-        w = np.exp(p.k * a_list - np.max(p.k * a_list))
-        a_r = float(w[mask_r].sum()) if mask_r.any() else 0.0
-        a_nr = float(w[~mask_r].sum()) if (~mask_r).any() else 0.0
+        a_r = float(a_abs[mask_r].sum()) if mask_r.any() else 0.0
+        a_nr = float(a_abs[~mask_r].sum()) if (~mask_r).any() else 0.0
         return stopping_probability(a_r, a_nr, p.epsilon_d)
 
 
@@ -369,26 +428,20 @@ def sample_recalls(
     *,
     recall_length_fn: Callable[[int], int] | None = None,
     max_recalls_per_list: int | None = None,
+    state: EncodingState | None = None,
 ) -> pa.Table:
-    """Deterministically sample a ``recalled.parquet``-shaped table from model probabilities.
-
-    Iterates through every (participant, list) in the dataset, runs the
-    stopping rule after each recall to decide whether to continue, and
-    collects the sampled recalls into a pyarrow Table matching
-    ``recalled.parquet`` schema.
-
-    ``recall_length_fn(W) -> R`` overrides the stopping rule (useful for
-    tests that want a fixed recall length). ``max_recalls_per_list`` caps
-    the total regardless of stopping rule (default: W).
-    """
+    """Deterministically sample a ``recalled.parquet``-shaped Table."""
     p = model.parameters
-    state = model.encode(dataset_skeleton)
+    if state is None:
+        state = model.encode(dataset_skeleton)
     pdf = dataset_skeleton.presented.to_pandas()
     group_keys = sorted(set(zip(pdf["participant"].tolist(), pdf["list"].tolist())))
 
     rows: list[dict] = []
     for part, lst in group_keys:
-        sub = pdf[(pdf["participant"] == part) & (pdf["list"] == lst)].sort_values("serial_position").reset_index(drop=True)
+        sub = pdf[(pdf["participant"] == part) & (pdf["list"] == lst)].sort_values(
+            "serial_position"
+        ).reset_index(drop=True)
         W = len(sub)
         cap = max_recalls_per_list if max_recalls_per_list is not None else W
         if recall_length_fn is not None:
@@ -412,15 +465,26 @@ def sample_recalls(
             "list_group": list_group,
         })
 
-        # Initialize c_ret from end-of-list item context.
         key = (int(part), int(lst))
-        c_ret = state.c_item[key][-1].copy()
+        # After a recall, c_ret reactivates the recalled item's ENCODING
+        # context (C&Z 2025 Fig 1b: "the retrieved item reactivates its
+        # encoding context at retrieval"). This is the item-level context
+        # c_item[picked_sp] at the time of encoding — NOT a drift from the
+        # end-of-list cue. Using the encoding context as the starting
+        # c_ret produces the canonical lag-CRP shape (forward asymmetry
+        # concentrated near the recalled item, not smeared by end-of-list
+        # recency).
+        c_ret = state.c_item[key][picked_sp].copy()
+        # Then drift by β_rec toward the input context e_{picked_sp} so that
+        # successive recalls accumulate bias toward post-sp items.
+        d_list = c_ret.shape[0]
+        c_ret = drift_retrieval_context(
+            c_ret, p.beta_rec, _onehot(d_list, picked_sp),
+        )
 
-        for out_pos in range(2, cap + 1):
-            if len(recalled_sps) >= W:
-                break
+        out_pos = 2
+        while out_pos <= cap and len(recalled_sps) < W:
             if recall_length_fn is None and p.paradigm == "free_recall":
-                # Consult the stopping rule.
                 p_stop = model.stopping_prob_after_recalls(
                     state, int(part), int(lst), c_ret, recalled_sps,
                 )
@@ -436,7 +500,6 @@ def sample_recalls(
             pick = int(rng.choice(W, p=next_probs / total))
             picked_sp = int(sub.iloc[pick]["serial_position"])
             if picked_sp in recalled_sps:
-                # Shouldn't happen with masking, but guard.
                 break
             recalled_sps.add(picked_sp)
             rows.append({
@@ -448,6 +511,13 @@ def sample_recalls(
                 "serial_position": picked_sp,
                 "list_group": list_group,
             })
+            # Reactivate c_ret to the encoding context of the newly-recalled
+            # item (C&Z 2025 Fig 1b), then drift by β_rec toward the input.
+            c_ret = state.c_item[key][picked_sp].copy()
+            c_ret = drift_retrieval_context(
+                c_ret, p.beta_rec, _onehot(c_ret.shape[0], picked_sp),
+            )
+            out_pos += 1
 
     if not rows:
         return pa.table({

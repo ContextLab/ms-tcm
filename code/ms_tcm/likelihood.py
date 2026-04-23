@@ -68,7 +68,8 @@ def list_log_likelihood(
             continue
         if prev_sp is None:
             probs = model.score_first_recall(encoding_state, participant, list_)
-            c_ret = encoding_state.c_item[key][W].copy()
+            # c_ret after first recall will be reset to the encoding context
+            # of the first recalled item, below (after we score it).
         else:
             if parameters.paradigm == "free_recall":
                 # Stopping rule: the model did NOT stop, so include log(1 - p_stop).
@@ -91,6 +92,10 @@ def list_log_likelihood(
         if p <= 0.0 or not np.isfinite(p):
             return float("-inf")
         total += float(np.log(p))
+        # After recording the recall at sp, reactivate c_ret to the encoding
+        # context of the recalled item (C&Z 2025 Fig 1b) — then apply β_rec
+        # drift toward the input e_sp for the NEXT recall's activation.
+        c_ret = encoding_state.c_item[key][sp].copy()
         prev_sp = sp
         recalled_sps.add(sp)
 
