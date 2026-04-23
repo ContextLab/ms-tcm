@@ -62,10 +62,19 @@ def test_tier2_wall_clock_under_30s() -> None:
     )
 
 
+@pytest.mark.slow
 def test_benchmark_record_has_required_fields() -> None:
     """Data-model §8: every benchmark record has timestamp, git_sha, platform,
     tier, dtype, n_participants, n_bootstraps, n_restarts, seed,
-    wall_clock_seconds, peak_memory_mb."""
+    wall_clock_seconds, peak_memory_mb.
+
+    Marked ``slow`` because it drives a real Tier-1 fit on the bundled
+    FRFR-category dataset (30 participants × 16 lists × 16 words); even
+    with ``n_bootstraps=2`` and ``n_restarts=1`` this takes 30-90 seconds
+    on CI hardware, which is too slow for the default ``-m "not slow"``
+    gate. The default gate already exercises ``benchmark_fit`` indirectly
+    through ``test_tier1_wall_clock_under_120s``.
+    """
     from ms_tcm.benchmark import benchmark_fit
 
     result = benchmark_fit(

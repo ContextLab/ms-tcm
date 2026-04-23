@@ -38,6 +38,23 @@
 
 \maketitle
 
+\section*{S0. v1 $\to$ v6 migration}
+
+The present paper describes MS-TCM v6, built on top of Cornell and Zhang's
+(2025) hierarchical CMR with storyline-return reinstatement at encoding
+(strength $\lambda$). An earlier v1 formulation of MS-TCM
+(\texttt{notes/ms-tcm.pdf}) used a single global context plus a bank of
+storyline-specific context vectors mixed into an encoding composite with
+fixed weights, plus a task-dependent retrieval reweighting. That v1
+architecture failed to reproduce the canonical free-recall phenomena
+(serial position curve, probability of first recall, lag-CRP) because
+it bypassed the standard CMR retrieval route, and was replaced in its
+entirety by the v6 architecture (\texttt{notes/two\_level\_cmr\_v6.pdf}).
+The v1 symbol inventory, its mapping to v6, and the file-level deletion
+manifest are recorded in \texttt{notes/v6\_migration.md}. Git history
+preserves the v1 source; this supplement and the main text use v6
+notation only.
+
 \section*{S1. Off-by-one correction in the reformatted recall table}
 
 The upstream \texttt{exp2.egg} file from \cite{ManningEtAl2023FRFR} encodes
@@ -79,86 +96,83 @@ Four implementation choices beyond the minimal equations in the main
 text are necessary for the model's forward simulator and its
 posterior-predictive to match the observed behavioural regularities
 (SPC, P(first recall), lag-CRP, clustering). Each is standard in the
-TCM / CMR literature but is worth stating explicitly because
-substituting any of them with a simpler-looking alternative makes the
-model degenerate.
+CMR / hierarchical-CMR literature but is worth stating explicitly.
 
 \paragraph{Unit-norm feature encoder.}
-Equation~(1) of the main text assumes ``unit-norm inputs'' so that
-the drift invariant $\|\mathbf{c}(t)\| = 1$ is preserved. Raw
+Equation~(1) of the main text assumes unit-norm inputs so the drift
+invariant $\|\mathbf{c}(t)\| = 1$ is preserved at every step. Raw
 multi-hot feature vectors (with $k$ active slots) have norm
-$\sqrt{k}$; using them directly makes $\|\mathbf{c}(t)\|$ grow
-without bound across encoding and collapses cosine similarities to a
-nearly-constant function of lag. Our feature encoder therefore
-L$_2$-normalises each row by default. See
-\texttt{code/ms\_tcm/features.py} (\texttt{encode\_features(...,
-normalize=True)}).
+$\sqrt{k}$; the feature encoder therefore $L_{2}$-normalises each row
+by default. See \texttt{code/ms\_tcm/features.py}
+(\texttt{encode\_features(..., normalize=True)}).
 
 \paragraph{Norm-preserving $\rho$ under non-orthogonal inputs.}
-For strictly orthonormal inputs, Howard \& Kahana (2002)'s
+For strictly orthonormal inputs, \citet{HowaKaha02a}'s
 $\rho = \sqrt{1 - \beta^2}$ preserves $\|\mathbf{c}(t)\| = 1$
 exactly. Multi-hot feature vectors that share active slots across
-items are unit-norm but \emph{not} orthogonal, so the orthonormal
-formula no longer maintains the invariant. We adopt the generalised
-formula
+items are unit-norm but not orthogonal, so the orthonormal formula no
+longer maintains the invariant. We adopt the generalised formula
 $\rho = \sqrt{1 + \beta^{2}(\dot{c}^{2} - 1)} - \beta\,\dot{c}$
 (where $\dot{c} = \mathbf{c}_{\mathrm{prev}} \cdot \mathbf{c}^{IN}$)
-from Polyn, Norman \& Kahana (2009, Eq.~3), which reduces exactly to
-$\sqrt{1 - \beta^{2}}$ when $\dot{c} = 0$ and preserves
-$\|\mathbf{c}(t)\| = 1$ for arbitrary unit-norm inputs. See
-\texttt{code/ms\_tcm/context.py::\_norm\_preserving\_rho}.
+from \citet{PolyEtal09} Eq.~3, which reduces exactly to
+$\sqrt{1 - \beta^{2}}$ when $\dot{c} = 0$ and preserves unit norm for
+arbitrary unit-norm inputs. This is applied at both the item level
+(rate $\beta_{\mathrm{enc}}$) and the storyline level
+(rate $\beta_{\mathrm{story}}$) in the v6 hierarchical layout; see
+\texttt{code/ms\_tcm/drift.py::\_norm\_preserving\_rho}.
 
-\paragraph{Softmax gain $\tau$.}
-Cosine similarities live in $[-1, 1]$. The straight softmax
-$P(i) \propto \exp(\mathrm{sim}_i)$ of a similarity vector with range
-$\sim 0.7$ is close to uniform (the ratio of the largest to smallest
-output is at most $e^{0.7} \approx 2$). Fitting the raw softmax
-therefore predicts near-uniform recall probabilities regardless of
-$\beta$, eliminating any recency or contiguity signature. We
-introduce an inverse-temperature / gain parameter $\tau > 0$ so that
-$P(i) \propto \exp(\tau \cdot \mathrm{sim}_i)$, fit alongside the
-other parameters via softplus reparameterisation. Under the full
-Polyn / Sederberg TCM-A formulation this sharpening arises
-dynamically from a leaky-competing-accumulator decision stage; our
-softmax-with-gain is a compact approximation to that equilibrium
-behaviour.
+\paragraph{Softmax gain $k$.}
+The retrieval readout $a_{j} = M^{\mathrm{IC}\,\top} \mathbf{c}^{\mathrm{ret}}$
+produces activations whose range is bounded; the softmax gain
+$k > 0$ sharpens the distribution. Without $k$, the softmax
+$P(j) \propto \exp(a_{j})$ over bounded activations is close to
+uniform and the model fails to produce recency or contiguity
+signatures. $k$ is fit alongside the other parameters; it is
+initialized at the Cornell and Zhang (2025) Table 1 value
+$k = 6.50$.
 
 \paragraph{Primacy gradient.}
-Vanilla TCM has no primacy mechanism; end-of-list items dominate
-retrieval for any drift rate. We add the Polyn et al.\ (2009)
-primacy bias $a_i = \phi_s \cdot e^{-\phi_d (i - 1)} + 1$ multiplied
-into the per-candidate score, where $i$ is the 1-indexed serial
-position. $\phi_s = 0$ disables primacy; $\phi_s, \phi_d$ are fit
-alongside the other parameters.
+Standard CMR inherits a Polyn-et-al.-style primacy scaling
+$p(t) = 1 + \phi \exp(-\psi t)$ applied to the
+$M^{\mathrm{IC}}$ update magnitude at encoding step $t$. This is a
+v6-native CMR mechanism, not an MS-TCM extension. Under the
+\texttt{--standard-tcm} reduction the hierarchical layer is disabled
+and the implementation falls back to a stronger primacy gradient
+($\phi = 30.0$, $\psi = 0.8$) to keep the shape assertion satisfied;
+under MS-TCM the hierarchical layer contributes additional primacy
+through the list-start synchronization of the storyline-level
+context, so a modest gradient ($\phi = 1.5$, $\psi = 0.5$) is
+sufficient.
 
 \paragraph{No-repeats candidate set.}
 Participants almost never repeat an item within one recall sequence
-(intra-list repeat rates in typical free-recall experiments are
-below $1\%$). A cosine-similarity decision rule without an
-exclusion constraint, however, predicts the most recent item with
-near-certainty whenever $\tau$ is moderate, because the self-
-similarity is $1$. We therefore mask the softmax output to zero for
-any serial position already recalled on the current list before
-re-normalising -- the standard TCM / CMR convention. The likelihood
-routine skips observed repeats (rather than returning $-\infty$) so
-that the handful of real repeats in the data do not poison the
-dataset log-likelihood.
+(intra-list repeat rates below $1\%$). A softmax readout without an
+exclusion constraint, however, would predict the most recent item
+with near-certainty whenever $k$ is moderate. We therefore mask the
+softmax output to zero for any serial position already recalled on
+the current list before re-normalising --- the standard CMR
+convention. The likelihood routine skips observed repeats (rather
+than returning $-\infty$) so the handful of real repeats in the
+data do not poison the dataset log-likelihood.
 
-\section*{S4. \S4.4 rounding cascade}
+\section*{S4. Numerical-accuracy anchor: the standard-CMR reduction}
 
-The model specification \texttt{notes/ms-tcm.pdf} \S4.4 reports the bridge-
-condition composite similarity as $0.806$ at $\beta_G = \beta_S = 0.5$,
-$w_G = 0.2$, $w_S = 0.8$, $m = 3$. This is a rounding-cascade artefact.
-Using the closed form $\rho = \sqrt{1 - \beta^2} = \sqrt{0.75}$ gives
-$\sigma(3) = 0.2 \cdot 0.75^2 + 0.8 \cdot \sqrt{0.75} = 0.1125 + 0.6928 =
-0.80532\dots$, which rounds to $0.805$ at three decimals (not $0.806$).
-The PDF's derivation used the truncated $\rho \approx 0.866$, then
-$\rho^4 \approx 0.563$, then rounded up at the final step.
-The unit test \texttt{test\_section\_4\_4\_numerical\_anchor} asserts the
-closed-form values $0.86603$ (grouped) and $0.80532$ (bridge) at $10^{-6}$
-tolerance. The agreement between the analytical closed-form and the model
-code is therefore exact; the apparent discrepancy with the PDF is purely a
-documentation issue.
+The v1 MS-TCM numerical anchor (composite-similarity closed form at
+$\beta = 0.5$, $m = 3$) is retired alongside the v1 architecture: v6
+does not form an encoding composite and has no analog of the v1
+mixture weights. The v6 numerical-accuracy anchor is instead the
+\texttt{--standard-tcm} reduction: with $\lambda = 0$ and the full
+dataset treated as a single storyline, MS-TCM reduces to standard CMR,
+and the \texttt{code/tests/test\_hcmr\_standard\_tcm.py} regression
+suite asserts that the reduced model matches a hand-derived standard
+CMR computation to $10^{-10}$ tolerance. The Layer 1 shape assertions
+of \texttt{code/tests/test\_behavioral\_regression.py} pin the
+canonical free-recall signatures (SPC, pFR, lag-CRP shapes) and the
+Layer 2 relative-fit assertions pin the ``no worse than
+\texttt{--standard-tcm}'' bar against the FRFR-category empirical
+curves. These anchors together establish that the v6 implementation
+faithfully reproduces its published inheritance before any MS-TCM
+contribution is credited.
 
 \newpage
 \renewcommand{\refname}{Supplementary references}

@@ -10,9 +10,9 @@ shell commands, and other important information, read the current plan at
 
 ## Project
 
-This repository develops the **Multi-Stream Temporal Context Model (MS-TCM)** — a formal extension of TCM (Howard & Kahana, 2002) that adds storyline-specific context vectors which drift only during encoding of events from their own storyline. The goal is to explain the equivalence of across-event-bridge and across-event-within-storyline cued recall (BF₀₁ = 412) reported in Xu, Duncan, & Manning (2026).
+This repository develops the **Multi-Stream Temporal Context Model (MS-TCM)** — a formal extension of Cornell and Zhang's (2025) hierarchical CMR that adds a single new mechanism: **storyline-return reinstatement at encoding with strength λ** (v6 Eq 6). The goal is to explain the equivalence of across-event-bridge and across-event-within-storyline cued recall (BF₀₁ = 412) reported in Xu, Duncan, & Manning (2026).
 
-**Canonical spec**: `notes/ms-tcm.pdf` is the source of truth for model equations, parameter regimes (β_G, β_S, w_G, w_S, γ, λ), the four empirical conditions being modeled, and the planned model comparisons (standard TCM vs. MS-TCM vs. "perfect reinstatement" vs. "independent storylines"). Re-read it before making modeling decisions.
+**Canonical spec**: `notes/two_level_cmr_v6.pdf` is the source of truth for model equations, the v6 parameter inventory (β_enc, β_story, γ_fc, k, λ, β_rec, ε_d), the four empirical conditions being modeled, and the planned model comparisons (standard CMR via `--standard-tcm` reduction vs. MS-TCM, plus the hierarchical-CMR reduction λ=0). The v1 MS-TCM design (`notes/ms-tcm.pdf`) is retired; see `notes/v6_migration.md` for the v1→v6 symbol mapping. Re-read `notes/two_level_cmr_v6.pdf` before making modeling decisions.
 
 The repository was cloned from the [ContextLab/latex-base](https://github.com/ContextLab/latex-base) template; most of the existing scaffolding (e.g., `paper/main.tex` titled "Template paper", the `brainiak`/`hypertools` Dockerfile, the `trig.pdf` demo figure, template READMEs) is placeholder content from that template and should be replaced with MS-TCM-specific content as the project progresses, not treated as authoritative.
 
@@ -26,7 +26,7 @@ paper/            LaTeX source; main.tex + supplement.tex compile separately
 paper/figs/       figure PDFs; paper/figs/source/ holds source files
 paper/CDL-bibliography/   git submodule — shared lab bib (cdl.bib)
 .specify/         Spec Kit workflow artifacts (plans, tasks, constitution)
-notes/            project notes, including ms-tcm.pdf (the spec)
+notes/            project notes, including two_level_cmr_v6.pdf (canonical spec), CornZhan25.pdf (theoretical predecessor), v6_migration.md (v1→v6 mapping); ms-tcm.pdf is retained as historical reference only
 ```
 
 Notebooks are expected to be the canonical way to reproduce each figure — keep the figure/notebook mapping 1:1 and documented in `code/README.md`.
@@ -61,10 +61,11 @@ The Dockerfile currently pins `brainiak`, `hypertools`, `pandas=1.0.5`, etc., in
 ## Modeling work — conventions specific to this project
 
 - **Four conditions** must be simulated simultaneously when fitting or comparing models: within-event, across-event-within-storyline (grouped, Exp 1), across-event-bridge (interleaved, Exp 3), and the Exp 2 condition. Fitting only one or two conditions misses the target phenomenon.
-- **The equivalence is the load-bearing prediction.** Any refactor or parameter change must preserve (or explicitly explain the loss of) the grouped ≈ bridge prediction under the identified regimes: storyline-context dominance (w_S ≫ w_G), task-driven retrieval reweighting in Exp 3, or matched-interference compensation (notes/ms-tcm.pdf §4.3).
-- **Numerical sanity check from the spec**: with β_G = β_S = 0.5, m = 3, w_G = 0.2, w_S = 0.8, composite similarity (weighted sum of per-stream cosines) is √0.75 ≈ 0.866 (grouped) and 0.2·0.75² + 0.8·√0.75 ≈ 0.805 (bridge). `notes/ms-tcm.pdf` §4.4 rounds these to 0.866 / 0.806 via a rounding cascade (ρ ≈ 0.866 → ρ⁴ ≈ 0.563), so the closed-form bridge is 0.80532… not 0.806. The unit test at `code/tests/test_composite.py::test_section_4_4_numerical_anchor` asserts the closed form at 1e-6. New code should reproduce these numbers before being trusted.
-- **Stimulus representations**: events should be encoded as feature vectors from sentence embeddings of video annotations (spec §8). Don't invent ad hoc feature schemes.
-- **Model comparison baseline**: always include standard TCM (single context, β_G only) as the reference; the MS-TCM contribution is measured against it.
+- **The equivalence is the load-bearing prediction.** Any refactor or parameter change must preserve (or explicitly explain the loss of) the grouped ≈ bridge prediction under the v6 mechanism (storyline-return reinstatement with strength λ; v6 Eq 6, §2.4). Under λ near 1 the bridge target's retrieval cue is driven by the cached storyline context and is nearly independent of the number of intervening other-storyline events; under λ = 0 the model reduces to Cornell and Zhang (2025) hierarchical CMR, which predicts a smaller bridge-grouped gap than standard CMR but not full equivalence.
+- **Numerical-accuracy anchor (v6 replacement for the retired v1 §4.4 anchor)**: the `--standard-tcm` reduction (λ=0, single storyline) must pass `code/tests/test_hcmr_standard_tcm.py` and the Layer 1 shape assertions of `code/tests/test_behavioral_regression.py` (SPC primacy+recency, pFR biased to end of list, lag-CRP peak at +1 with forward asymmetry) before any MS-TCM claim is trusted. Both layers cite `notes/CornZhan25.pdf` Figure 2 and the FRFR-category reference curves at `data/processed/reference_curves/`.
+- **Stimulus representations**: events should be encoded as feature vectors from sentence embeddings of scene annotations for cued-recall paradigms (v6 §1.5 Option 3, threaded through `MFCPreMatrix`). For the FRFR-category worked example the identity `MFCPreMatrix` is used (v6 §1.5 Option 1). Don't invent ad hoc feature schemes.
+- **Model comparison baseline**: always include the `--standard-tcm` reduction (λ=0, single storyline) as the reference; the MS-TCM contribution (storyline-return reinstatement) is measured against it.
+- **Performance target**: Tier 1 `ms-tcm fit data/raw/frfr_category --n-bootstraps 1000 --n-restarts 5 --seed 42` completes in under 120 s on CI hardware (FR-031). Use `python scripts/benchmark_fit.py data/raw/frfr_category --tier tier1 --seed 42 --n-bootstraps 1000 --n-restarts 5` to measure; the wall-clock is recorded in `data/processed/benchmarks/benchmark_log.csv`.
 
 ## Spec Kit integration
 

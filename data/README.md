@@ -6,11 +6,21 @@
   Source: https://github.com/ContextLab/FRFR-analyses (PsyArXiv:
   https://psyarxiv.com/erzfp, exp2.egg).
   See [scripts/reformat_frfr_category.py](../scripts/reformat_frfr_category.py)
-  to regenerate from the upstream egg.
+  to regenerate from the upstream egg. The raw dataset is byte-identical
+  across the v1→v6 rewrite (FR-061 / `manifest.json` SHA-256s unchanged).
 - `processed/` — derived artifacts (gitignored; regenerate with the commands
-  below). Contains `fits/` (MLE + bootstrap output from `ms-tcm fit`) and
-  `embeddings/` (sentence-transformer vectors from
-  `code/scripts/compute_embeddings.py`).
+  below). Contains:
+  - `fits/` — MLE + bootstrap output from `ms-tcm fit`.
+  - `embeddings/` — sentence-transformer vectors from
+    `code/scripts/compute_embeddings.py`.
+  - `reference_curves/` — empirical SPC / pFR / lag-CRP for FRFR-category,
+    cached by `scripts/build_reference_curves.py` with SHA-256s in
+    `manifest.json`; consumed by `code/tests/test_behavioral_regression.py`
+    (Layer 2 relative-fit bar) and `code/figures/make_fig_behavioral.py`.
+    Regenerate via
+    `python scripts/build_reference_curves.py data/raw/frfr_category --out data/processed/reference_curves/`.
+  - `benchmarks/benchmark_log.csv` — append-only history of
+    `ms-tcm benchmark` / `scripts/benchmark_fit.py` runs (FR-031 / SC-009).
 
 ## Canonical dataset layout
 

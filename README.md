@@ -1,14 +1,30 @@
-# MS-TCM: Multi-Stream Temporal Context Model
+# MS-TCM: A Multi-Stream Temporal Context Model for Narrative Memory
 
-This repository implements the Multi-Stream Temporal Context Model (MS-TCM)
-— an extension of TCM (Howard & Kahana, 2002) that adds storyline-specific
-context vectors which drift only during encoding of events from their own
-storyline. The model is described in [notes/ms-tcm.pdf](notes/ms-tcm.pdf);
-the first worked example fits MS-TCM to the category condition of
-Manning et al. (2023), "Feature and order manipulations in a free recall
-task affect memory for current and future lists"
+This repository implements the Multi-Stream Temporal Context Model (MS-TCM),
+a minimal extension of Cornell and Zhang's (2025) hierarchical CMR that
+adds exactly one mechanism: **storyline-return reinstatement at encoding
+with strength λ**. When a listener or viewer interleaves multiple storylines
+and later returns to a previously-abandoned storyline, the corresponding
+storyline-level context is partially reinstated from a cached snapshot
+rather than drifting through the intervening other-storyline events.
+
+The canonical model specification is
+[notes/two_level_cmr_v6.pdf](notes/two_level_cmr_v6.pdf); the theoretical
+predecessor is
+[Cornell and Zhang (2025) "Hierarchical Context Guides Human Memory Search"](notes/CornZhan25.pdf)
+(Psychological Review). The first worked example fits MS-TCM to the category
+condition of Manning et al. (2023), "Feature and order manipulations in a
+free recall task affect memory for current and future lists"
 ([PsyArXiv](https://psyarxiv.com/erzfp),
 [code/data](https://github.com/ContextLab/FRFR-analyses)).
+
+The Tier 1 fitter runs in under 2 minutes on CI hardware
+(`ms-tcm fit data/raw/frfr_category --n-bootstraps 1000 --n-restarts 5
+--seed 42`), and the behavioral regression suite verifies that the fitted
+model reproduces the canonical free-recall signatures (serial position
+curve, probability of first recall, lag-CRP). See
+[specs/002-ms-tcm-v6-hcmr/](specs/002-ms-tcm-v6-hcmr/) for the active
+feature specification.
 
 ## Quickstart
 

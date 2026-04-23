@@ -1,19 +1,43 @@
 \begin{table}[t]
 \centering
-\caption{Maximum-likelihood parameter estimates for MS-TCM fit to the FRFR category condition. Values are MLE $[\text{95\% bootstrap CI}]$ (percentile method, $n_{\text{bootstraps}}=20$). Derived parameters are not fit independently (e.g.\ $w_S = 1 - w_G$).}
+\caption{MS-TCM v6 parameter inventory and starting values.
+Starting values for the six inherited parameters come from
+\citet{CornellZhang2025} Table~1; $\lambda$ starts at the value
+recommended by the v6 design notes
+(\texttt{notes/two\_level\_cmr\_v6.pdf} \S5). The
+\texttt{--standard-tcm} reduction fixes $\lambda = 0$ and disables
+the storyline-level context; the remaining six parameters are
+optimised. Free-recall-only parameters ($\beta_{\mathrm{rec}}$,
+$\varepsilon_{d}$) are ignored in cued-recall paradigms.}
 \label{tab:params}
 \small
-\begin{tabular}{@{}l l l p{0.52\linewidth}@{}}
+\begin{tabular}{@{}l l l p{0.46\linewidth}@{}}
 \hline
-Parameter & Symbol & Value $[\text{95\% CI}]$ & Description \\
+Parameter & Identifier & Starting value & Description \\
 \hline
-\texttt{beta\_global} & $\beta_G$ & 0.950 \,[0.001,\,1.000] & Drift rate of the global temporal context. Higher values mean the global context updates more strongly toward each new event (and forgets older ones more quickly). \\
-\texttt{beta\_storyline} & $\beta_S$ & 0.533 \,[0.241,\,0.551] & Drift rate of the storyline-specific context. A value near 0 means each storyline context behaves as a nearly static signature of the category; a value near 1 means within-storyline events overwrite one another as they are encoded. \\
-\texttt{w\_global} & $w_G$ & 0.000 \,[0.000,\,0.543] & Weight on the global context in the composite encoding context. Higher values make the model more sensitive to global temporal contiguity (standard TCM sets $w_G = 1$). \\
-\texttt{w\_storyline} & $w_S$ & 1.000 (derived) & Weight on the active storyline context in the composite. Higher values make category or storyline identity a stronger cue for recall. \\
-\texttt{w\_global\_ret} & $w^{\mathrm{ret}}_G$ & 0.000 (derived) & Global-context weight at retrieval. Can differ from $w_G$ at encoding, reflecting task-driven reweighting of cues. \\
-\texttt{w\_storyline\_ret} & $w^{\mathrm{ret}}_S$ & 1.000 (derived) & Storyline-context weight at retrieval. Increasing it models an instruction to recall within the same storyline. \\
+$\beta_{\mathrm{enc}}$ & \texttt{beta\_enc} & $0.679$ &
+Item-level context drift rate at encoding.
+\citep{CornellZhang2025} Table~1. \\
+$\beta_{\mathrm{story}}$ & \texttt{beta\_story} & $0.400$ &
+Storyline-level context drift rate at encoding (only drifts when the
+storyline is active). \citep{CornellZhang2025} Table~1 (labelled
+$\beta_{\mathrm{list}}$ there). \\
+$\gamma_{\mathrm{fc}}$ & \texttt{gamma\_fc} & $0.315$ &
+Weight on the experimental vs pre-experimental input context
+(Eq.~\ref{eq:cin}). \citep{CornellZhang2025} Table~1. \\
+$k$ & \texttt{k} & $6.50$ &
+Softmax gain at retrieval (Eq.~\ref{eq:softmax}).
+\citep{CornellZhang2025} Table~1. \\
+$\lambda$ & \texttt{lambda\_reinstate} & $0.80$ &
+Storyline-return reinstatement strength (Eq.~\ref{eq:lambda}).
+\textbf{NEW in MS-TCM}; initialized per
+\texttt{notes/two\_level\_cmr\_v6.pdf} \S5. \\
+$\beta_{\mathrm{rec}}$ & \texttt{beta\_rec} & $0.326$ &
+Within-trial retrieval context drift rate (free-recall only).
+\citep{CornellZhang2025} Table~1. \\
+$\varepsilon_{d}$ & \texttt{epsilon\_d} & $1.04$ &
+Stopping-rule rate (free-recall only).
+\citep{CornellZhang2025} Table~1. \\
 \hline
-\multicolumn{4}{l}{$\log L = -14067.2$, AIC $= 28140.4$, BIC $= 28160.1$; $n_{\text{participants}}=30$, $n_{\text{lists}}=480$, $n_{\text{recalls}}=5205$} \\
 \end{tabular}
 \end{table}
