@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ms_tcm"
-version = "0.1.0.dev0"
-description = "Multi-Stream Temporal Context Model (MS-TCM): implementation + FRFR-category worked example + MLE/CI fitter"
+version = "0.2.0.dev0"
+description = "Multi-Stream Temporal Context Model (MS-TCM): v6 hierarchical-CMR implementation + FRFR-category worked example + MLE/CI fitter"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -24,6 +24,15 @@ dependencies = [
 dev = [
     "pytest>=7",
     "pytest-cov>=4",
+    "pytest-xdist>=3",
+]
+jax = [
+    "jax>=0.4.28",
+    "jaxlib>=0.4.28",
+    "optax>=0.2.0",
+]
+figures = [
+    "matplotlib>=3.8",
 ]
 
 [project.scripts]

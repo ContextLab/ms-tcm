@@ -1,52 +1,48 @@
 <!--
 Sync Impact Report
 ==================
-Version change: (unratified template) → 1.0.0
-Bump rationale: Initial ratification. The prior file was an unfilled template with
-bracketed placeholders and no substantive content, so this is the first concrete
-constitution for the MS-TCM project.
+Version change: 1.0.0 → 1.1.0
+Bump rationale (2026-04-23): Feature 002-ms-tcm-v6-hcmr adopts
+`notes/two_level_cmr_v6.pdf` as the canonical model specification, replacing
+the v1 `notes/ms-tcm.pdf`. This amendment updates the canonical-spec pointer
+throughout the constitution and retires the v1-specific §4.4 numerical
+anchor (0.866 / 0.806), replacing it with the v6-native anchor: the
+`--standard-tcm` reduction (λ=0, one storyline) MUST pass the Q2 Layer 1
+shape-assertion policy for SPC / pFR / lag-CRP. This is a MINOR bump per
+§Governance ("expanded guidance within an existing section"): no principle
+is added, removed, or weakened; the Accuracy, Single Source of Truth,
+Clarity, and Reproducibility principles retain their NON-NEGOTIABLE status.
 
-Principles (new project — all added):
-- I. Accuracy (NON-NEGOTIABLE)
+Principles (unchanged):
+- I. Accuracy (NON-NEGOTIABLE) — §4.4 anchor example replaced with v6 anchor
 - II. Single Source of Truth
-- III. Clarity
+- III. Clarity — symbol list updated to v6 notation
 - IV. Reproducibility (NON-NEGOTIABLE)
 
-Added sections:
-- Additional Constraints (stimulus data, computational environment, scientific scope)
-- Development Workflow (version control, review gates, spec-kit integration)
-- Governance (amendment procedure, versioning policy, compliance review)
+Sections touched:
+- Header paragraph (canonical spec pointer)
+- Principle I (§4.4 anchor example replaced)
+- Principle III (symbol list updated to v6)
+- Additional Constraints > Canonical specification (pointer updated)
+- Governance (version footer updated to 1.1.0)
 
-Removed sections: none (template slots repurposed)
+Templates requiring updates: none. The plan-template, spec-template, and
+tasks-template carry no hardcoded references to v1 symbols or §4.4.
 
-Templates requiring updates:
-- .specify/templates/plan-template.md — ⚠ pending: "Constitution Check" section
-  is a placeholder ("[Gates determined based on constitution file]"); when the
-  first plan is authored via /speckit.plan, it should instantiate gates that
-  verify Accuracy, Single Source of Truth, Clarity, and Reproducibility
-  (e.g., "all citations verified? all functions unique? setup script tested
-  on macOS/Ubuntu/Windows?"). No edit to the template itself is required now.
-- .specify/templates/spec-template.md — ✅ no change needed; existing
-  Success Criteria / Assumptions structure is compatible.
-- .specify/templates/tasks-template.md — ✅ no change needed; principle-driven
-  task types (verification tasks, cross-platform setup tasks, deduplication
-  tasks) can be added per-feature without template edits.
-- CLAUDE.md — ✅ already references notes/ms-tcm.pdf as the canonical spec
-  and emphasizes numerical verification; consistent with Principle I.
-- README.md — ⚠ pending: still reflects the CDL LaTeX template
-  ("Paper title", "Authors"); should be updated to the MS-TCM project when
-  substantive content exists. Not a constitution-driven edit.
-
-Deferred items: none.
+Historical note: the original 1.0.0 Sync Impact Report is preserved in the
+git history at the ratification commit.
 -->
 
 # MS-TCM Constitution
 
 The Multi-Stream Temporal Context Model (MS-TCM) project formalizes and tests an
-extension of TCM (Howard & Kahana, 2002) in which storyline-specific context
-vectors drift only during encoding of events from their own storyline. The
-canonical specification lives in `notes/ms-tcm.pdf`. This constitution governs
-how the repository's code, analyses, and writing are produced and maintained.
+extension of Cornell & Zhang's (2025) hierarchical Context Maintenance and
+Retrieval model, adding storyline-return reinstatement at encoding-time (the
+λ mechanism). The canonical specification lives in `notes/two_level_cmr_v6.pdf`
+(as of version 1.1.0, ratified 2026-04-23); the earlier `notes/ms-tcm.pdf`
+(v1) is historical and is superseded — see `notes/v6_migration.md` for the
+v1-to-v6 symbol mapping. This constitution governs how the repository's code,
+analyses, and writing are produced and maintained.
 
 ## Core Principles
 
@@ -58,10 +54,15 @@ verified before it is committed or published. Assumptions are not evidence.
 Rules:
 
 - Every function that produces a numerical result MUST have at least one unit
-  test that compares its output against a known, hand-derived answer (e.g., the
-  0.866 grouped-condition composite similarity and 0.806 bridge-condition
-  composite similarity worked out in `notes/ms-tcm.pdf` §4.4 are required
-  regression anchors for any MS-TCM similarity code).
+  test that compares its output against a known, hand-derived answer. The
+  required numerical-accuracy regression anchor for the MS-TCM core is the
+  `--standard-tcm` reduction: when λ=0 and the storyline context is disabled,
+  the model MUST reduce to Cornell & Zhang's (2025) hierarchical CMR and
+  reproduce the free-recall benchmark phenomena (SPC, p(first recall),
+  lag-CRP) on the FRFR-category dataset under the Q2 Layer 1 shape-assertion
+  policy defined in `specs/002-ms-tcm-v6-hcmr/contracts/regression-tests.md`.
+  The retired v1 §4.4 anchor (0.866 / 0.806) is historical — see
+  `notes/v6_migration.md`.
 - Every citation MUST be verified by retrieving the cited source
   (web search + fetch + reading the relevant section) and confirming that the
   cited claim appears in it. Citations that cannot be verified MUST be removed
@@ -112,8 +113,14 @@ Rules:
 
 - Jargon and formal notation MUST be defined on first use in any
   reader-facing document (paper, supplement, notebook narrative, README).
-  Symbols reused from `notes/ms-tcm.pdf` (β_G, β_S, w_G, w_S, ρ_G, ρ_S,
-  c_G, c_S, γ, λ) MUST be introduced with the same meaning given there.
+  Symbols reused from `notes/two_level_cmr_v6.pdf` (β_enc, β_story, γ_fc,
+  k, λ, β_rec, ε_d, c^item, c^story, M^IC, M^SC, M^FC_pre, M^FC_exp) MUST
+  be introduced with the same meaning given there. The corresponding Python
+  identifiers (e.g. `lambda_reinstate` for λ, `gamma_fc` for γ_fc,
+  `epsilon_d` for ε_d) substitute reserved keywords and stylistic
+  conventions but carry the same semantics. The retired v1 symbols (β_G,
+  β_S, w_G, w_S, ρ_G, ρ_S, c_G, c_S, v1 γ resumption) are historical —
+  see `notes/v6_migration.md`.
 - Claims MUST be proportioned to evidence. Phrases such as "proves",
   "demonstrates conclusively", or "shows that X causes Y" MUST be used only
   when the underlying analysis supports that strength of claim; weaker
@@ -162,11 +169,14 @@ Rules:
 
 ## Additional Constraints
 
-- **Canonical specification**: `notes/ms-tcm.pdf` is the source of truth for
-  model equations, parameter regimes, and the four empirical conditions
-  (within-event, across-event-within-storyline, across-event-bridge, and the
-  Experiment 2 condition). Discrepancies between code and the spec MUST be
-  resolved by updating the spec or the code, not by letting them drift apart.
+- **Canonical specification**: `notes/two_level_cmr_v6.pdf` is the source of
+  truth for model equations, parameter regimes (β_enc, β_story, γ_fc, k, λ,
+  β_rec, ε_d), and the four empirical conditions (within-event,
+  across-event-within-storyline, across-event-bridge, and the Experiment 2
+  condition). `notes/CornZhan25.pdf` is the theoretical predecessor (Cornell
+  & Zhang 2025, Psychological Review). `notes/ms-tcm.pdf` (v1) is historical
+  only. Discrepancies between code and the v6 spec MUST be resolved by
+  updating the spec or the code, not by letting them drift apart.
 - **Data discipline**: `data/raw/` is append-only with respect to preprocessing
   (raw inputs are never rewritten by analysis code). All transformations write
   to `data/processed/`. Every file in `data/processed/` MUST be regenerable
@@ -228,4 +238,4 @@ Rules:
   guidance for automated coding agents and is itself subject to the
   constitution.
 
-**Version**: 1.0.0 | **Ratified**: 2026-04-20 | **Last Amended**: 2026-04-20
+**Version**: 1.1.0 | **Ratified**: 2026-04-20 | **Last Amended**: 2026-04-23

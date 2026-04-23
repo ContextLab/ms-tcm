@@ -1,10 +1,13 @@
-"""Multi-Stream Temporal Context Model (MS-TCM).
+"""Multi-Stream Temporal Context Model (MS-TCM) — v6 hierarchical CMR.
 
-Public API surface — see ``specs/001-ms-tcm-impl/contracts/model-api.md``.
+Canonical spec: ``notes/two_level_cmr_v6.pdf``.
+Theoretical predecessor: ``notes/CornZhan25.pdf`` (Cornell & Zhang 2025).
+v1 migration notes: ``notes/v6_migration.md``.
 
-Names are loaded lazily so the package remains importable during
-incremental development (individual submodules land in their own tasks).
-Once the full implementation is in place, every name below resolves eagerly.
+Public API surface — see ``specs/002-ms-tcm-v6-hcmr/contracts/model-api.md``.
+
+Names are loaded lazily so the package remains importable during incremental
+development (v6 submodules land across Phases 2 and 3 of the 002 feature).
 """
 
 from __future__ import annotations
@@ -12,27 +15,18 @@ from __future__ import annotations
 import importlib
 from typing import TYPE_CHECKING
 
-__version__ = "0.1.0.dev0"
+__version__ = "0.2.0.dev0"
 
-# Map public name -> (module, attribute)
+# Map public name -> (module, attribute). Only v1-neutral names during the
+# Phase-1 window; v6 names (ModelParameters, HierarchicalCMRModel, etc.) are
+# added as their modules land in Phase 2 and Phase 3.
 _LAZY: dict[str, tuple[str, str]] = {
-    "ModelParameters":         ("ms_tcm.params", "ModelParameters"),
-    "cosine_similarity":       ("ms_tcm.similarity", "cosine_similarity"),
-    "recall_probabilities":    ("ms_tcm.similarity", "recall_probabilities"),
     "encode_features":         ("ms_tcm.features", "encode_features"),
     "Dataset":                 ("ms_tcm.dataset", "Dataset"),
     "load_dataset":            ("ms_tcm.dataset", "load_dataset"),
     "save_dataset":            ("ms_tcm.dataset", "save_dataset"),
     "validate_dataset":        ("ms_tcm.schema", "validate_dataset"),
-    "MSTCMModel":              ("ms_tcm.model", "MSTCMModel"),
-    "EncodingState":           ("ms_tcm.model", "EncodingState"),
-    "sample_recalls":          ("ms_tcm.model", "sample_recalls"),
     "load_frfr_category":      ("ms_tcm.frfr", "load_frfr_category"),
-    "list_log_likelihood":     ("ms_tcm.likelihood", "list_log_likelihood"),
-    "dataset_log_likelihood":  ("ms_tcm.likelihood", "dataset_log_likelihood"),
-    "fit_mle":                 ("ms_tcm.fit", "fit_mle"),
-    "FitResult":               ("ms_tcm.fit", "FitResult"),
-    "bootstrap_ci":            ("ms_tcm.bootstrap", "bootstrap_ci"),
 }
 
 __all__ = sorted(list(_LAZY.keys()) + ["__version__"])
@@ -45,17 +39,24 @@ def __getattr__(name: str):
         value = getattr(module, attr)
         globals()[name] = value  # cache for next access
         return value
+    # Retired v1 symbols should raise with a pointer to the migration note.
+    _RETIRED_V1 = {
+        "MSTCMModel", "EncodingState", "sample_recalls",
+        "ModelParameters", "cosine_similarity", "recall_probabilities",
+        "list_log_likelihood", "dataset_log_likelihood",
+        "fit_mle", "FitResult", "bootstrap_ci",
+    }
+    if name in _RETIRED_V1:
+        raise AttributeError(
+            f"{name!r} was retired or moved during the v6 rewrite "
+            f"(feature 002-ms-tcm-v6-hcmr). See notes/v6_migration.md for the "
+            f"v1-to-v6 symbol mapping. The v6 replacement will land in Phase 2/3."
+        )
     raise AttributeError(f"module 'ms_tcm' has no attribute {name!r}")
 
 
 if TYPE_CHECKING:  # pragma: no cover
-    from ms_tcm.params import ModelParameters  # noqa: F401
-    from ms_tcm.similarity import cosine_similarity, recall_probabilities  # noqa: F401
     from ms_tcm.features import encode_features  # noqa: F401
     from ms_tcm.dataset import Dataset, load_dataset, save_dataset  # noqa: F401
     from ms_tcm.schema import validate_dataset  # noqa: F401
-    from ms_tcm.model import MSTCMModel, EncodingState, sample_recalls  # noqa: F401
     from ms_tcm.frfr import load_frfr_category  # noqa: F401
-    from ms_tcm.likelihood import list_log_likelihood, dataset_log_likelihood  # noqa: F401
-    from ms_tcm.fit import fit_mle, FitResult  # noqa: F401
-    from ms_tcm.bootstrap import bootstrap_ci  # noqa: F401

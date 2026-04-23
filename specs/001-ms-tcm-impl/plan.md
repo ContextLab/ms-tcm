@@ -1,5 +1,12 @@
 # Implementation Plan: MS-TCM Model Implementation with FRFR-Category Worked Example
 
+> **SUPERSEDED** (2026-04-23) by [../002-ms-tcm-v6-hcmr/plan.md](../002-ms-tcm-v6-hcmr/plan.md).
+> The v1 MS-TCM math described here was retired during feature 002-ms-tcm-v6-hcmr;
+> see [../../notes/v6_migration.md](../../notes/v6_migration.md) for the v1-to-v6 symbol
+> mapping, deletion manifest, and rationale. The dataset pipeline and FRFR-category
+> worked example survive into v6; the model math (composite.py, similarity.py,
+> v1 params.py fields, §4.4 numerical anchor) does not.
+
 **Branch**: `001-ms-tcm-impl` | **Date**: 2026-04-20 | **Last updated**: 2026-04-21 | **Spec**: [spec.md](spec.md)
 **Input**: Feature specification from `/specs/001-ms-tcm-impl/spec.md`
 

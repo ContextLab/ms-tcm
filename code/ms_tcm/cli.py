@@ -1,13 +1,15 @@
-"""ms-tcm command-line interface.
+"""ms-tcm command-line interface (Phase-1 window).
 
-See contracts/cli.md for the full contract.
+See ``specs/002-ms-tcm-v6-hcmr/contracts/cli.md`` for the full contract. The
+``fit`` / ``run`` / ``benchmark`` subcommands land in Phase 4 and Phase 5 of
+feature 002; during Phase 1 only ``validate`` is available.
 
 Exit codes:
     0 success
     1 argument validation error
     2 input file missing / unreadable
     3 schema validation failed
-    4 fit aborted: <90% bootstraps converged
+    4 fit aborted: <90% bootstraps converged (Phase 4+)
     5 unexpected runtime error
 """
 
@@ -15,13 +17,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 from pathlib import Path
 
-from ms_tcm.bootstrap import bootstrap_ci
-from ms_tcm.dataset import load_dataset
-from ms_tcm.fit import FitError
 from ms_tcm.schema import validate_dataset
 
 
@@ -51,76 +49,18 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     return 0 if report.ok else 3
 
 
-def _cmd_fit(args: argparse.Namespace) -> int:
-    dataset_dir = Path(args.dataset_dir)
-    out_dir = Path(args.out)
-
-    if not dataset_dir.exists():
-        print(f"error: dataset directory not found: {dataset_dir}", file=sys.stderr)
-        return 2
-
-    if out_dir.exists() and any(out_dir.iterdir()):
-        if not args.force:
-            print(
-                f"error: output directory {out_dir} is not empty; "
-                "pass --force to replace",
-                file=sys.stderr,
-            )
-            return 1
-        # Remove only ms-tcm fit artifacts.
-        for name in ("fit_summary.json", "fit_bootstrap.parquet"):
-            candidate = out_dir / name
-            if candidate.exists():
-                candidate.unlink()
-
-    dataset = load_dataset(dataset_dir)
-
-    if getattr(args, "alpha", False):
-        print(
-            "error: --alpha (§5.2 conversational references) requires an edge "
-            "table and is not supported for free-recall datasets.",
-            file=sys.stderr,
-        )
-        return 1
-
-    optional: dict[str, bool] = {}
-    if args.gamma:
-        optional["gamma"] = True
-    if args.lambda_interference:
-        optional["lambda"] = True
-
-    try:
-        result = bootstrap_ci(
-            dataset,
-            n_bootstraps=args.n_bootstraps,
-            seed=args.seed,
-            n_restarts=args.n_restarts,
-            standard_tcm=args.standard_tcm,
-            ci=args.ci,
-            optional_mechanisms=optional,
-            separate_retrieval_weights=args.separate_retrieval_weights,
-        )
-    except FitError as exc:
-        print(f"fit aborted: {exc}", file=sys.stderr)
-        return 4
-    except Exception as exc:  # noqa: BLE001
-        print(f"unexpected error: {exc!r}", file=sys.stderr)
-        return 5
-
-    result.save(out_dir)
-    print(f"wrote {out_dir}/fit_summary.json and fit_bootstrap.parquet")
-    if args.json:
-        print(json.dumps(
-            {"parameters": result.parameters, "log_likelihood": result.log_likelihood,
-             "aic": result.aic, "bic": result.bic,
-             "elapsed_seconds": result.elapsed_seconds},
-            indent=2, sort_keys=True,
-        ))
-    return 0
+def _cmd_fit_stub(args: argparse.Namespace) -> int:
+    print(
+        "error: 'ms-tcm fit' is disabled during the v6 Phase-1 window. "
+        "The v6 fitter lands in Phase 4 of feature 002-ms-tcm-v6-hcmr. "
+        "See specs/002-ms-tcm-v6-hcmr/tasks.md (T031, T032, T041).",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="ms-tcm", description="MS-TCM CLI")
+    parser = argparse.ArgumentParser(prog="ms-tcm", description="MS-TCM CLI (v6)")
     subparsers = parser.add_subparsers(dest="cmd", required=True)
 
     # validate
@@ -131,33 +71,13 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--json", action="store_true", help="Emit JSON output.")
     v.set_defaults(func=_cmd_validate)
 
-    # fit
+    # fit (stub — real subcommand lands in Phase 4)
     f = subparsers.add_parser(
-        "fit", help="Fit MS-TCM (or standard TCM) with 95%% bootstrap CIs.",
+        "fit", help="[disabled in Phase 1] MLE + bootstrap CI fit.",
     )
-    f.add_argument("dataset_dir", help="Path to the dataset directory.")
-    f.add_argument("--out", required=True, help="Output directory for fit artifacts.")
-    f.add_argument("--seed", type=int, default=0)
-    f.add_argument("--n-bootstraps", type=int, default=1000)
-    f.add_argument("--n-restarts", type=int, default=5)
-    f.add_argument("--ci", type=float, default=0.95)
-    f.add_argument("--standard-tcm", action="store_true",
-                   help="Constrain w_storyline=0 for the TCM baseline.")
-    f.add_argument("--gamma", action="store_true",
-                   help="Enable Section-5.1 resumption reinstatement.")
-    f.add_argument("--alpha", action="store_true",
-                   help="Enable Section-5.2 conversational references. "
-                        "Requires an edge table; not supported for free-recall "
-                        "datasets like FRFR-category -- raises NotImplementedError.")
-    f.add_argument("--lambda", dest="lambda_interference", action="store_true",
-                   help="Enable Section-5.3 differential interference.")
-    f.add_argument("--separate-retrieval-weights", action="store_true",
-                   help="Fit w_G^ret independently of w_G.")
-    f.add_argument("--force", action="store_true",
-                   help="Overwrite an existing non-empty --out directory.")
-    f.add_argument("--json", action="store_true",
-                   help="Print the fit summary as JSON on stdout after writing to disk.")
-    f.set_defaults(func=_cmd_fit)
+    f.add_argument("dataset_dir", nargs="?")
+    f.add_argument("--out", required=False)
+    f.set_defaults(func=_cmd_fit_stub)
 
     return parser
 
