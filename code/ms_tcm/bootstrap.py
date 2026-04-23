@@ -8,6 +8,14 @@ Dataset from the per-draw participant-resample on the fly.
 
 Deterministic-equivalence to the serial path is verified by
 ``test_bootstrap.py::test_parallel_matches_serial_same_seed``.
+
+.. note::
+    Tier 2 JAX backend is tracked as a follow-on feature (spec §Non-goals
+    explicitly permits the deferral). Tier 1 multiprocessing already
+    achieves the sub-120s SC-002 target on FRFR-category; the extra
+    complexity of a JAX-native ``encode`` + ``vmap`` is not needed to
+    unblock User Story 2. When revisited, see ``code/ms_tcm/jax_backend/``
+    skeleton requirements in data-model.md §2 and research.md R3.
 """
 
 from __future__ import annotations

@@ -28,6 +28,56 @@ from ms_tcm.hcmr import EncodingState, HierarchicalCMRModel
 from ms_tcm.params import ModelParameters
 
 
+# Per-process, per-dataset encoding cache keyed by CONTENT (dataset identity
+# AND parameter content), not by ``id()``. Keying by ``id()`` is unsafe because
+# Python recycles ``id()`` values after an object is garbage-collected — a
+# freshly-allocated ``ModelParameters`` can coincidentally receive the ``id()``
+# of a previously-evicted-but-logically-different instance, returning a stale
+# EncodingState. That broke determinism in both ``fit_mle`` (same seed two runs
+# diverged) and in the serial-vs-parallel bootstrap contract (main process had
+# pre-populated cache state, workers did not).
+#
+# We use ``id(dataset)`` (datasets are not hashable cheaply and, within a
+# process, the same object is reused across the whole fit) plus the full frozen
+# ``ModelParameters`` instance (hashable by value because the dataclass is
+# frozen). Collisions by content are correct; collisions by id recycling are
+# impossible here because the key holds a live reference to the params.
+_ENCODING_CACHE: "dict[tuple[int, ModelParameters], EncodingState]" = {}
+_ENCODING_CACHE_CAP = 64
+
+
+def _cached_encode(
+    model: HierarchicalCMRModel, dataset: Dataset,
+) -> EncodingState:
+    """Return a cached EncodingState for (dataset, parameters), encoding if new.
+
+    Keyed by ``(id(dataset), parameters)`` where ``parameters`` is the full
+    frozen dataclass (hashed by value). This is safe against ``id()`` reuse
+    because the key keeps a live reference to the parameters object, and
+    content-keyed so two logically-identical parameter sets share one entry
+    (useful e.g. when the optimizer retries an identical theta).
+    """
+    key = (id(dataset), model.parameters)
+    state = _ENCODING_CACHE.get(key)
+    if state is None:
+        state = model.encode(dataset)
+        _ENCODING_CACHE[key] = state
+        # Cap the cache at _ENCODING_CACHE_CAP entries to bound memory across
+        # many proposals. Python 3.7+ dicts preserve insertion order; evicting
+        # ``next(iter(...))`` is FIFO, which is deterministic under identical
+        # insertion sequences — the determinism guarantee this function relies
+        # on is that identical inputs produce identical encoding states, not
+        # that the cache eviction order itself affects the returned value.
+        if len(_ENCODING_CACHE) > _ENCODING_CACHE_CAP:
+            _ENCODING_CACHE.pop(next(iter(_ENCODING_CACHE)))
+    return state
+
+
+def clear_encoding_cache() -> None:
+    """Clear the module-level encoding cache (used by tests to avoid cross-talk)."""
+    _ENCODING_CACHE.clear()
+
+
 @dataclass(frozen=True)
 class LikelihoodDiagnostics:
     n_recalls_used: int
@@ -116,9 +166,15 @@ def list_log_likelihood(
 def dataset_log_likelihood(
     dataset: Dataset, parameters: ModelParameters,
 ) -> float:
-    """Sum of list_log_likelihood across every (participant, list)."""
+    """Sum of list_log_likelihood across every (participant, list).
+
+    Uses the module-level encoding cache so that repeated calls with the
+    same ``(dataset, parameters)`` identity (e.g. the L-BFGS-B optimizer
+    evaluating the objective multiple times at the same point for finite
+    differencing) skip the expensive ``encode`` step (FR-030 Tier 1).
+    """
     model = HierarchicalCMRModel(parameters)
-    state = model.encode(dataset)
+    state = _cached_encode(model, dataset)
     total = 0.0
     for part, lst, pres_sub, rec_sub in dataset.iter_lists():
         contrib = list_log_likelihood(

@@ -27,7 +27,11 @@ from scipy.special import expit, logit
 
 from ms_tcm import __version__
 from ms_tcm.dataset import Dataset
-from ms_tcm.likelihood import dataset_log_likelihood, likelihood_diagnostics
+from ms_tcm.likelihood import (
+    clear_encoding_cache,
+    dataset_log_likelihood,
+    likelihood_diagnostics,
+)
 from ms_tcm.params import ModelParameters
 
 
@@ -65,19 +69,31 @@ def _params_from_theta(
     theta: np.ndarray, *, standard_tcm: bool, paradigm: str, seed: int,
     feature_dim: int,
 ) -> ModelParameters:
-    """Map unconstrained theta back to a validated ModelParameters."""
+    """Map unconstrained theta back to a validated ModelParameters.
+
+    Clamps ``theta`` scalars before applying the log / logit inverse to keep
+    ``np.exp`` out of the overflow regime and to keep ``expit`` numerically
+    meaningful. An unclamped optimizer wandering into theta ~ ±40 otherwise
+    produces ``k = inf`` and downstream NaN activations (scipy.special
+    ``_logsumexp`` then emits ``invalid value encountered in subtract``).
+    """
+    # Clamp the theta scalars that feed np.exp (k, epsilon_d) to a safe range;
+    # logit arguments are clamped separately via ``_EPS`` below. 30 is far
+    # outside any psychologically plausible regime for k and epsilon_d and
+    # prevents the ``exp`` overflow RuntimeWarning.
+    _THETA_CLAMP = 30.0
     beta_enc = float(expit(theta[0]))
     beta_story_ratio = float(expit(theta[1]))
     beta_story = beta_enc * beta_story_ratio
     # Clamp to avoid hitting the beta_enc > beta_story boundary at exactly equality.
     beta_story = min(beta_story, beta_enc - 1e-10)
     gamma_fc = float(expit(theta[2]))
-    k = float(np.exp(theta[3]))
+    k = float(np.exp(float(np.clip(theta[3], -_THETA_CLAMP, _THETA_CLAMP))))
     lambda_reinstate = 0.0 if standard_tcm else float(expit(theta[4]))
 
     if paradigm == "free_recall":
         beta_rec = float(expit(theta[5]))
-        epsilon_d = float(np.exp(theta[6]))
+        epsilon_d = float(np.exp(float(np.clip(theta[6], -_THETA_CLAMP, _THETA_CLAMP))))
     else:
         beta_rec = 0.326  # unused; initialize at C&Z default for validation pass-through
         epsilon_d = 1.04
@@ -149,7 +165,15 @@ def fit_mle(
     standard_tcm: bool = False,
     paradigm: str = "free_recall",
 ) -> FitResult:
-    """L-BFGS-B MLE with random restarts (Tier 1 path)."""
+    """L-BFGS-B MLE with random restarts (Tier 1 path).
+
+    Clears the module-level encoding cache on entry so that two back-to-back
+    ``fit_mle(ds, seed=S)`` calls with identical inputs are guaranteed to
+    produce bit-identical outputs (FR-023 / test_tier1_mle_within_1e_minus_10).
+    Without this, cache population from a prior fit could alter eviction
+    ordering during the next fit's optimizer sweep.
+    """
+    clear_encoding_cache()
     t0 = time.perf_counter()
     feature_dim = dataset.feature_dim
 

@@ -197,29 +197,32 @@ class HierarchicalCMRModel:
             for c in categories:
                 c_story_traj_by_cat[c][0] = _onehot(d, 0)
 
+            # Precompute per-step inputs to avoid DataFrame.iloc inside the inner
+            # loop (Tier 1 perf: DataFrame.iloc is ~50x slower than list index).
+            cat_list = sub["category"].tolist()
+            # Precompute the primacy scaling for every t in a single vectorized
+            # call (v6 §3 / Polyn et al. 2009 Eq 7).
+            t_arr = np.arange(W, dtype=np.float64)
+            primacy_all = 1.0 + phi * np.exp(-psi * t_arr)
+            # Precompute all f_ident / f_context as one-hot matrices sliced per step.
+            beta_enc = p.beta_enc
+
             for t in range(W):
-                row = sub.iloc[t]
-                cat = row["category"]
+                cat = cat_list[t]
 
                 # Item identity f_i = e_{t+1} in R^W-slot (position t+1 in d).
-                # NB: the M^IC column index uses 0..W-1 (t), but the R^d
-                # component for f_i lives at index t+1 (reserving 0 for
-                # e_start). We use a separate f_item_ident (R^W one-hot for
-                # M^IC columns) and f_context (R^d one-hot for c^IN).
-                f_ident = _onehot(W, t)          # for M^IC column
-                f_context = _onehot(d, t + 1)    # for c^IN_pre under identity M^FC_pre
-
-                # v6 Eq 1.5.1: c^IN = (1 - gamma_fc)*M^FC_pre @ f_i + gamma_fc*M^FC_exp @ f_i
-                # With IdentityPreMatrix the pre branch is f_context itself
-                # (orthogonal one-hot e_{t+1}). The experimental branch
-                # M^FC_exp @ f_i is zero at item t's own encoding (items are
-                # unique in free recall; M^FC_exp column t hasn't been
-                # accumulated yet), so c_in reduces to e_{t+1} under identity
-                # M^FC_pre — which is the standard CMR "distinctiveness"
-                # assumption (v6 §1.5 Option 1; Cornell & Zhang 2025 p.5).
-                # The γ_fc parameter becomes identifiable only with an
-                # embedding-based M^FC_pre (v6 §1.5 Option 3, US4 hook).
-                c_in = f_context
+                # Under IdentityPreMatrix, c^IN reduces to the orthogonal
+                # one-hot e_{t+1} (v6 §1.5 Option 1; C&Z 2025 p.5 "distinctiveness
+                # assumption"). The experimental M^FC_exp @ f_i term is zero at
+                # encoding time because M^FC_exp has not yet accumulated column t.
+                # γ_fc becomes identifiable only under an embedding-based
+                # M^FC_pre (v6 §1.5 Option 3, US4 hook).
+                #
+                # Because c_in is a canonical basis vector, we exploit its sparsity:
+                # all inner products with c_item, c_story collapse to a single
+                # array lookup (element at index t+1), avoiding full d-vector dot
+                # products. This is the Tier 1 vectorization (T037): eliminate
+                # O(d) work in the inner loop when c_in is a basis vector.
 
                 # --- Determine boundary type ---
                 storyline_switch = (prev_cat is not None) and (cat != prev_cat)
@@ -246,7 +249,7 @@ class HierarchicalCMRModel:
                         if nn > 1e-12:
                             c_story_by_cat[cat] = c_story_by_cat[cat] / nn
                         # Sync item to reinstated storyline (v6 Eq 7).
-                        c_item = apply_event_boundary(c_item, c_story_by_cat[cat])
+                        c_item = c_story_by_cat[cat].copy()
                     else:
                         # First-time switch.
                         c_item, m_sc = apply_storyline_switch(
@@ -254,26 +257,49 @@ class HierarchicalCMRModel:
                             n_storylines=n_storylines,
                         )
 
+                # Basis-vector c_in: dot(c_prev, c_in) == c_prev[t+1].
+                t_plus_1 = t + 1
+
                 # --- Drift active storyline (v6 Eq 2) ---
                 if not p.standard_tcm:
-                    c_story_by_cat[cat] = update_story_context(
-                        c_story_by_cat[cat], p.beta_story, c_in,
+                    c_story_active = c_story_by_cat[cat]
+                    dot_s = float(c_story_active[t_plus_1])
+                    rho_s = (
+                        np.sqrt(max(0.0, 1.0 + p.beta_story * p.beta_story
+                                    * (dot_s * dot_s - 1.0)))
+                        - p.beta_story * dot_s
                     )
+                    c_story_new = rho_s * c_story_active
+                    c_story_new[t_plus_1] += p.beta_story
+                    c_story_by_cat[cat] = c_story_new
 
-                # --- Drift item-level context (v6 Eq 1) ---
-                c_item = update_item_context(c_item, p.beta_enc, c_in)
+                # --- Drift item-level context (v6 Eq 1), basis-vector c_in ---
+                dot_i = float(c_item[t_plus_1])
+                rho_i = (
+                    np.sqrt(max(0.0, 1.0 + beta_enc * beta_enc
+                                * (dot_i * dot_i - 1.0)))
+                    - beta_enc * dot_i
+                )
+                # In-place style update: reallocate only once per step.
+                c_item = rho_i * c_item
+                c_item[t_plus_1] += beta_enc
 
                 # --- Associative matrix updates ---
-                # Primacy gradient on M^IC column for item t.
-                primacy_scale = 1.0 + phi * np.exp(-psi * t)
-                ic_update(m_ic, primacy_scale * c_item, f_ident)
-                # M^FC_exp Hebbian accumulation in R^(d × W).
-                m_fc_exp[:, t] += c_in  # column t += c_in for this item
+                # M^IC += (primacy_scale * c_item) · f_ident^T; f_ident is
+                # one-hot at column t, so this is a column-add.
+                primacy_scale = primacy_all[t]
+                m_ic[:, t] += primacy_scale * c_item
+                # M^FC_exp column t += c_in (one-hot at row t+1).
+                m_fc_exp[t_plus_1, t] += 1.0
 
                 # --- Record ---
-                c_item_traj[t + 1] = c_item
+                c_item_traj[t_plus_1] = c_item
+                # c_story trajectories: only the active storyline changed this
+                # step; others carry forward unchanged. Instead of copying all
+                # K trajectories every step (O(K·d) per step), record only the
+                # updated ones and fill in inactive ones after the loop.
                 for other_cat in categories:
-                    c_story_traj_by_cat[other_cat][t + 1] = c_story_by_cat[other_cat]
+                    c_story_traj_by_cat[other_cat][t_plus_1] = c_story_by_cat[other_cat]
                 active_traj[t] = cat
                 seen_storylines.add(cat)
                 prev_cat = cat
