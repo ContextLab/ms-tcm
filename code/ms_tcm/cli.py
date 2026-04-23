@@ -147,6 +147,34 @@ def _cmd_fit(args: argparse.Namespace) -> int:
         }, indent=2, sort_keys=True))
         return 0
 
+    # Validate the --pre-context value early so a bogus path fails before
+    # the fit starts. "identity" is the default and requires no setup;
+    # any other value is interpreted as a Parquet path and must exist.
+    # Non-identity loading currently raises NotImplementedError per T011
+    # (USE integration is out of scope for feature 002 / spec §Non-goals).
+    pre_context = str(args.pre_context)
+    if pre_context != "identity":
+        pc_path = Path(pre_context)
+        if not pc_path.exists():
+            print(
+                f"error: --pre-context path does not exist: {pc_path}",
+                file=sys.stderr,
+            )
+            return 2
+        # Load via EmbeddingPreMatrix.from_parquet — explicitly raises
+        # NotImplementedError today; when T011 lands USE support, this
+        # call site will start working without any CLI changes.
+        from ms_tcm.preexp import EmbeddingPreMatrix
+
+        try:
+            EmbeddingPreMatrix.from_parquet(pc_path)
+        except NotImplementedError as exc:
+            print(
+                f"error: --pre-context=<path> is not yet supported: {exc}",
+                file=sys.stderr,
+            )
+            return 2
+
     from ms_tcm.bootstrap import bootstrap_ci
     from ms_tcm.dataset import load_dataset
 
