@@ -22,11 +22,26 @@ __version__ = "0.2.0.dev0"
 # added as their modules land in Phase 2 and Phase 3.
 _LAZY: dict[str, tuple[str, str]] = {
     "encode_features":         ("ms_tcm.features", "encode_features"),
+    "DatasetFeatureCache":     ("ms_tcm.features", "DatasetFeatureCache"),
     "Dataset":                 ("ms_tcm.dataset", "Dataset"),
     "load_dataset":            ("ms_tcm.dataset", "load_dataset"),
     "save_dataset":            ("ms_tcm.dataset", "save_dataset"),
     "validate_dataset":        ("ms_tcm.schema", "validate_dataset"),
     "load_frfr_category":      ("ms_tcm.frfr", "load_frfr_category"),
+    # v6 model + fit surface (feature 002).
+    "ModelParameters":         ("ms_tcm.params", "ModelParameters"),
+    "MFCPreMatrix":            ("ms_tcm.preexp", "MFCPreMatrix"),
+    "IdentityPreMatrix":       ("ms_tcm.preexp", "IdentityPreMatrix"),
+    "EmbeddingPreMatrix":      ("ms_tcm.preexp", "EmbeddingPreMatrix"),
+    "HierarchicalCMRModel":    ("ms_tcm.hcmr", "HierarchicalCMRModel"),
+    "EncodingState":           ("ms_tcm.hcmr", "EncodingState"),
+    "sample_recalls":          ("ms_tcm.hcmr", "sample_recalls"),
+    "dataset_log_likelihood":  ("ms_tcm.likelihood", "dataset_log_likelihood"),
+    "list_log_likelihood":     ("ms_tcm.likelihood", "list_log_likelihood"),
+    "fit_mle":                 ("ms_tcm.fit", "fit_mle"),
+    "FitResult":               ("ms_tcm.fit", "FitResult"),
+    "FitError":                ("ms_tcm.fit", "FitError"),
+    "bootstrap_ci":            ("ms_tcm.bootstrap", "bootstrap_ci"),
 }
 
 __all__ = sorted(list(_LAZY.keys()) + ["__version__"])
@@ -41,10 +56,9 @@ def __getattr__(name: str):
         return value
     # Retired v1 symbols should raise with a pointer to the migration note.
     _RETIRED_V1 = {
-        "MSTCMModel", "EncodingState", "sample_recalls",
-        "ModelParameters", "cosine_similarity", "recall_probabilities",
-        "list_log_likelihood", "dataset_log_likelihood",
-        "fit_mle", "FitResult", "bootstrap_ci",
+        "MSTCMModel",                 # renamed to HierarchicalCMRModel
+        "cosine_similarity",          # subsumed into ms_tcm.retrieval
+        "recall_probabilities",       # moved to ms_tcm.retrieval
     }
     if name in _RETIRED_V1:
         raise AttributeError(

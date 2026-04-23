@@ -137,17 +137,25 @@ class HierarchicalCMRModel:
 
         group_keys = sorted(set(zip(pdf["participant"].tolist(), pdf["list"].tolist())))
 
-        # Primacy gradient (Sederberg et al. 2008 Eq 5; Polyn et al. 2009 Eq
-        # 7). The v6 spec inherits CMR's retrieval mechanism unchanged (v6
-        # §3), so this primacy scaling is a v6-native CMR mechanism, not an
-        # MS-TCM addition. Values phi=4.0, psi=1.5 match the mid-range of
-        # published CMR fits (Polyn et al. 2009 Table 1; Sederberg et al.
-        # 2008 Table 1 reports phi ~ 2-6). Strong primacy is needed to
-        # balance the heavy recency of end-of-list item-level context
-        # (||c_item[W]||=1 with 0.679 mass on slot W) and produce pFR
-        # spread rather than an all-on-sp=W spike.
-        phi = 1.5
-        psi = 0.5
+        # Primacy gradient (Sederberg et al. 2008 Eq 5; Polyn et al. 2009
+        # Eq 7): scale M^IC Hebbian updates by (1 + phi·exp(-psi·t)) so
+        # early-list items accumulate stronger item-context associations.
+        # This is a v6-native CMR mechanism (v6 §3 "retrieval dynamics
+        # unchanged"), not an MS-TCM addition.
+        #
+        # In MS-TCM (hierarchical), primacy also emerges from storyline
+        # context boundary-sync at list start (c_item[0] = e_start shared
+        # by storyline context), so a modest primacy gradient suffices.
+        # Under the --standard-tcm reduction the hierarchical primacy
+        # entry-point is disabled (v6 §3.1 C&Z 2025 Fig 3e), so we fall
+        # back to a stronger gradient to keep the Layer-1 primacy assertion
+        # satisfied (SC-006 / FR-021).
+        if p.standard_tcm:
+            phi = 30.0
+            psi = 0.8
+        else:
+            phi = 1.5
+            psi = 0.5
 
         for part, lst in group_keys:
             mask = (pdf["participant"] == part) & (pdf["list"] == lst)

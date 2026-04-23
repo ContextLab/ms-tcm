@@ -1,0 +1,35 @@
+{
+  "curves": {
+    "lag_crp": {
+      "file": "frfr_category_lag_crp.parquet",
+      "rows": 30,
+      "schema": {
+        "crp": "float64",
+        "lag": "int64"
+      },
+      "sha256": "ba02157a5ecc5045d5df51bf5540ec838f7714d4792a31baed6412c43dcb4371"
+    },
+    "pfr": {
+      "file": "frfr_category_pfr.parquet",
+      "rows": 16,
+      "schema": {
+        "p_first_recall": "float64",
+        "serial_position": "int64"
+      },
+      "sha256": "1e2f8d9b215aa7377cf89d475736ef11cb3f7d7e0c377fdab1c43c71cecf75bb"
+    },
+    "spc": {
+      "file": "frfr_category_spc.parquet",
+      "rows": 16,
+      "schema": {
+        "p_recall": "float64",
+        "serial_position": "int64"
+      },
+      "sha256": "f5d6c3479b4fbc0bcb61a47ff3f528731000a1560c9b8b39641d8b327d1ae8bd"
+    }
+  },
+  "invocation": "python scripts/build_reference_curves.py /Users/jmanning/ms-tcm/data/raw/frfr_category --out /Users/jmanning/ms-tcm/data/processed/reference_curves",
+  "num_words_per_list": 16,
+  "source_dataset": "data/raw/frfr_category",
+  "source_manifest_sha256": "7995ba80ea9c430789cdd5c12cbaaec72096c896db53826301eb6f7fbe7c6925"
+}
