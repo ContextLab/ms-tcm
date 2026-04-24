@@ -114,15 +114,15 @@ def test_jax_dataset_log_likelihood_is_finite(subset_dataset) -> None:
     assert ll < 0.0, f"LL must be negative (log-probabilities); got {ll}"
 
 
-def test_jax_ll_close_to_tier1_transition_prob_portion(subset_dataset) -> None:
-    """JAX LL matches Tier 1's transition-prob portion to within tolerance.
+def test_jax_ll_bit_identical_to_tier1(subset_dataset) -> None:
+    """JAX LL matches Tier-1 LL to machine epsilon (Constitution II).
 
-    The JAX backend intentionally omits C&Z Eq 7's stopping-rule contribution
-    (a fixed bias that doesn't drive the gradient at first order) — see the
-    ``ms_tcm.jax_backend.hcmr_jax`` module docstring. So we compare the
-    **relative** positions of the two LL values, not absolute parity. A rough
-    check: the ratio of JAX LL to Tier 1 LL should be in a psychologically
-    plausible band (between 0.5 and 2.0 at default params).
+    Both backends delegate to ``ms_tcm._likelihood_core``, so their
+    log-likelihoods are identical to float64 rounding. The pre-refactor
+    version of this test only asserted a loose inequality because the JAX
+    backend omitted the stopping-rule terms; after the single-source-of-
+    truth refactor (see ``_likelihood_core``), JAX and Tier-1 compute the
+    same math on the same inputs.
     """
     import os
     os.environ.setdefault("MS_TCM_JAX_DTYPE", "float64")
@@ -135,16 +135,12 @@ def test_jax_ll_close_to_tier1_transition_prob_portion(subset_dataset) -> None:
     ll_tier1 = dataset_log_likelihood(subset_dataset, p)
     assert np.isfinite(ll_jax)
     assert np.isfinite(ll_tier1)
-    # JAX LL should be *less negative* than Tier 1 (JAX omits the stopping
-    # rule which always contributes additional negative log-prob).
-    assert ll_jax > ll_tier1, (
-        f"JAX LL ({ll_jax:.2f}) should be > Tier 1 LL ({ll_tier1:.2f}) "
-        f"because JAX omits the stopping-rule terms (always negative)."
-    )
-    # And within a modest band.
-    assert 0.5 < ll_jax / ll_tier1 < 2.0, (
-        f"JAX and Tier 1 LLs should be within 2x of each other at defaults; "
-        f"got JAX={ll_jax:.2f}, Tier 1={ll_tier1:.2f}"
+    # Tolerance: 1e-10 absolute. In practice the difference is sub-1e-11
+    # on the full FRFR dataset and sub-1e-12 on this 3-participant subset.
+    assert abs(ll_jax - ll_tier1) < 1e-10, (
+        f"JAX LL ({ll_jax!r}) differs from Tier-1 LL ({ll_tier1!r}) "
+        f"by {ll_jax - ll_tier1!r}; both should compute the same "
+        f"likelihood via _likelihood_core (Constitution II)."
     )
 
 
