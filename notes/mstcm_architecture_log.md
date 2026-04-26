@@ -218,6 +218,173 @@ For each list with K storylines, maintain TWO nested hierarchies:
 
 ---
 
+## Iteration 2 (refined) — Strict hierarchical recall: global cues storyline, storyline cues events
+
+**Empirical motivation**: same as Iteration 2 (proposed) above —
+SPC scallops at category boundaries (peaks at 1, 5, 9, 13).
+
+**Note on FRFR-category structure**:
+- Lists 0–7 (early): items grouped by category but with **variable
+  category order per list** (not strict ABCD blocks; categories
+  alternate at the 1–2 item granularity within early lists).
+- Lists 8–15 (late): random order (NOT systematically interleaved).
+
+The observed average-across-lists scallop pattern reflects that on
+average, category-boundary positions cluster near 1, 5, 9, 13 across
+lists, but individual lists have varying boundary structure.
+
+### Architecture (refined per Jeremy's specification)
+
+**Two-level strict hierarchy**, where storylines act as "items"
+for the global level and events are sub-items within each storyline:
+
+```
+GLOBAL level                  STORYLINE-s level
+c^global, c^list_G            c^story_s, c^story_list_s    (one per storyline)
+M^FC_G, M^CF_G                M^FC_s, M^CF_s
+M^lists_G                     -
+
+drifts on EVERY item          drifts ONLY on storyline-s items
+```
+
+**Encoding (per Jeremy: option Q1=b, Q2=iii)**:
+- Every item's pre-experimental input drives BOTH branches:
+  - Global branch: c^global drifts (via β_enc^G), c^list_G drifts
+    (via β_list^G), update M^FC_G and M^CF_G with this item.
+  - Storyline branch: only the active storyline's c^story_s drifts
+    (via β_enc), only its c^story_list_s drifts (via β_list); other
+    storylines stay frozen. Update M^FC_s and M^CF_s with this item.
+- λ storyline-return reinstatement still applies at the storyline
+  level (when a storyline resumes after a gap, blend cached + current
+  via λ).
+- M^lists_G is a (K, d_global) matrix. At storyline departures or
+  list end, write c^story_list_s_end into M^lists_G[s] (so the global
+  level can retrieve a storyline's cached list-context).
+
+**Retrieval (refined per Q3)**: ONE retrieval procedure with a τ
+mixture between two routes:
+
+**Route α — recency (prob 1 − τ)**:
+- Cue: c^global_W (end-of-encoding global context).
+- Score against M^CF_G — produces a per-item activation distribution
+  via softmax(k · M^CF_G · c_ret_G).
+- Sample first recall, drift c^global_ret, repeat. Stopping rule per
+  C&Z. On stop: terminate.
+- This is a flat, global-only retrieval — NO storyline lookup at all.
+  Pure recency-driven, like base C&Z without hierarchical fallback.
+
+**Route β — strict hierarchical (prob τ)**:
+- Step 1 (global cues storyline). a^story = M^lists_G · c^global_W;
+  sample storyline ŝ ∝ softmax(k · a^story).
+- Step 2 (set storyline-level cue per Jeremy's preference, option
+  ii from "what does c^story_ŝ look like at retrieval"):
+  c_ret_s = e_start (the within-storyline beginning-of-context). This
+  produces within-storyline PRIMACY (favors the first storyline-ŝ
+  item), matching the observed scallop peaks at 1, 5, 9, 13.
+- Step 3 (within-storyline retrieval). Score against M^CF_s with
+  c_ret_s; sample, drift, stopping rule. Already-recalled mask per
+  C&Z (across whole list, not just storyline).
+- Step 4 (on storyline-ŝ stop, decide what to do):
+  **Default: option B** — re-run Step 1 with c^global_ret (drifted
+  by β_rec during the storyline-ŝ recalls), but with storyline ŝ
+  REMOVED from the candidate set ("exhausted" — once a storyline
+  retrieval has stalled, don't reselect it). If no candidate
+  storylines remain, terminate.
+- The pattern of recall under route β is: cluster within ŝ_1,
+  switch to ŝ_2, cluster within ŝ_2, etc. This produces strong
+  same-category lag-CRP transitions and clear category boundaries.
+
+After the first recall in EITHER route, β_rec drift updates c^global
+(and any active c^story) toward the recalled item's c^IN_rec.
+
+**Open questions where Jeremy's input matters most**:
+
+[OQ1] Should route α use the GLOBAL associative matrix (M^CF_G) or
+ALSO consult per-storyline matrices? Currently I'm specifying
+M^CF_G only, so route α is a pure-global retrieval with no
+storyline involvement. Alternative: route α uses a composite
+M^CF that's the union of M^CF_G + Σ_s M^CF_s. The first is
+cleaner for identifiability; the second has more total
+associations available at retrieval but blurs the route
+distinction.
+
+[OQ2] In route β step 4 (storyline exhaustion), should we ALSO
+update M^lists_G to reflect that the storyline was exhausted
+(e.g., zero out that row)? Or just track it via a separate
+"exhausted" mask? Mask is cleaner.
+
+[OQ3] In route β step 2, the "c_ret_s = e_start" choice produces
+pure within-storyline primacy. An alternative is c_ret_s =
+M^lists_G[ŝ] (the cached storyline-list context at storyline
+ŝ's last departure). That's the v6 Eq 6 / C&Z Eq 14 style
+reinstatement. Should give a more "C&Z-like" within-storyline
+recency-then-primacy curve for that storyline. We picked
+e_start for now to maximize the scallop signal.
+
+**Parameter inventory** (vs Iteration 1):
+- ADD β_enc^G: separate global-level encoding drift rate. 10 params total.
+- DEFER per-storyline β_enc_s: too many degrees of freedom for now;
+  reintroduce when fitting heterogeneous-storyline datasets
+  (short-story vs novel vs film comparison).
+
+**Reductions** (sanity):
+- K = 1: storyline level = global level; M^lists_G has one row.
+  Should reduce to C&Z 2025 (with τ acting as the original v1 τ).
+- τ = 0: Iteration 2 reduces to "C&Z without hierarchical fallback"
+  — pure global-context retrieval.
+- λ = 0: storyline contexts don't reinstate at returns (only matters
+  in interleaved encoding, which late FRFR lists lack systematically).
+
+**What this predicts (and what we should look for in fits)**:
+- ✓ SPC scallops at storyline boundaries from route β within-storyline
+  primacy.
+- ✓ pFR primacy spike at sp=1 from route β when storyline ŝ_1 happens
+  to be the first-encoded storyline.
+- ✓ Same-category lag-CRP > different-category lag-CRP, more
+  pronounced than under iteration 1 (route β chains within a
+  storyline before switching).
+- New diagnostic: FRP (probability of first-recall by category) —
+  if route β fires (prob τ) and selects ŝ uniformly, then ~τ/K mass
+  goes to each category's first item. Compare across categories.
+
+**Risks / things to watch**:
+- (i) Route β is recursive (after a storyline stops, we go back to
+  global). Need to bound the number of route-β iterations to keep
+  computation tractable. Could cap at K (one round-trip per storyline)
+  since once exhausted, storylines drop out.
+- (ii) The "c_ret_s = e_start" choice (OQ3) is the simplest but might
+  over-predict within-storyline primacy at the expense of recency
+  within a storyline. Could fit and check residuals.
+- (iii) Per-storyline associative matrices add 2K matrices of size
+  (d, W_s) each, where W_s is items in storyline s. For FRFR-category
+  K=4 with 4 items each, that's 8 small matrices. Cheap.
+- (iv) The likelihood now needs to marginalize over (route, ŝ) for
+  the first recall AND over which storyline each subsequent recall
+  was "produced from" (since under route β, intermediate recalls
+  could come from any storyline that has been visited and not
+  exhausted). This is more complex than the current latent T.
+
+**Implementation plan (when we agree on OQ1, OQ2, OQ3)**:
+
+The likelihood-marginalization complexity in Risk (iv) is the main
+concern. A practical simplification: assume the route is fixed for
+the entire recall sequence (chosen at recall onset), so route α
+generates ALL recalls or route β generates ALL recalls. Then the
+likelihood is τ · LL_β + (1-τ) · LL_α at the top level. Under route
+β, the latent is the sequence of storyline visits ŝ_1, ŝ_2, ...,
+which can be inferred from the recalls (each recall's storyline
+identity is observed via cat_indices). So route β's LL conditional
+on the storyline-visit sequence is straightforward; the marginal
+just sums over storyline orderings consistent with the observed
+recall sequence — and there's typically only ONE such ordering
+(the order in which storylines first appear in the recalls). So the
+marginalization is small.
+
+This dramatically simplifies the implementation. I'll write up the
+detailed pseudo-code once OQ1-OQ3 are resolved.
+
+---
+
 ## Iteration N (placeholder)
 
 When we propose further changes, append a new `## Iteration N`
