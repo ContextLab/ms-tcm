@@ -127,6 +127,35 @@ class ModelParameters:
     MS-TCM variant.
     """
 
+    w_global: float = 0.0
+    """Cross-storyline mixing weight at retrieval — NEW in MS-TCM (this work).
+
+    Within the storyline-initiation route (route β), the within-storyline
+    retrieval phase uses a mixture of the per-storyline associative
+    matrix M^CF_s and the global matrix M^CF_G:
+
+        M^CF_effective(s) = (1 − w_global) · M^CF_s + w_global · M^CF_G
+
+    The same mixing applies to M^FC at the c^IN_rec drift target. This
+    relaxes the strict per-storyline separation: at w_global = 0 the
+    within-storyline phase only sees within-storyline items (strict
+    hierarchy); at w_global = 1 the within-storyline phase uses only
+    the global matrix (effectively allowing any item to be activated,
+    just with a re-cued initial c_ret).
+
+    Empirical motivation: FRFR-category lag-CRP shows participants make
+    BOTH within-storyline and across-storyline transitions during
+    within-recall flow (57% / 38% within-cat in early/late lists, NOT
+    100%). The strict architecture (w_global = 0) cannot produce
+    cross-storyline transitions during a within-storyline visit, so
+    the model pays log-likelihood cost for every observed cross-cat
+    transition via the more-restrictive storyline-selection mechanism.
+    Allowing w_global > 0 lets the model fit the observed mixing rate.
+
+    Disabled by default (w_global = 0) to preserve the strict-hierarchy
+    baseline behavior.
+    """
+
     # --- Free-recall-only parameters ---
 
     beta_rec: float = 0.326
@@ -228,6 +257,10 @@ class ModelParameters:
         if not (0.0 <= self.tau_init <= 1.0):
             raise ValueError(
                 f"tau_init must be in [0, 1]; got {self.tau_init!r}"
+            )
+        if not (0.0 <= self.w_global <= 1.0):
+            raise ValueError(
+                f"w_global must be in [0, 1]; got {self.w_global!r}"
             )
         if not (0.0 <= self.beta_rein <= 1.0):
             raise ValueError(

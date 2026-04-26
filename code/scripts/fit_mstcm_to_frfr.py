@@ -42,17 +42,21 @@ from ms_tcm.frfr import load_frfr_category
 from ms_tcm.params import ModelParameters
 
 
-# 10 free parameters in optimizer-friendly unconstrained "theta" space:
-#     theta[0] = logit(beta_enc)
-#     theta[1] = logit(beta_list / beta_enc)         (enforces beta_list < beta_enc)
-#     theta[2] = logit(gamma_fc)
-#     theta[3] = log(k)
-#     theta[4] = logit(beta_rec)
-#     theta[5] = log(epsilon_d)
-#     theta[6] = logit(beta_rein)
-#     theta[7] = logit(lambda_reinstate)
-#     theta[8] = logit(tau_init)
-#     theta[9] = logit(beta_enc_global)
+# 11 free parameters in optimizer-friendly unconstrained "theta" space:
+#     theta[0]  = logit(beta_enc)
+#     theta[1]  = logit(beta_list / beta_enc)        (enforces beta_list < beta_enc)
+#     theta[2]  = logit(gamma_fc)
+#     theta[3]  = log(k)
+#     theta[4]  = logit(beta_rec)
+#     theta[5]  = log(epsilon_d)
+#     theta[6]  = logit(beta_rein)
+#     theta[7]  = logit(lambda_reinstate)
+#     theta[8]  = logit(tau_init)
+#     theta[9]  = logit(beta_enc_global)
+#     theta[10] = logit(w_global)
+
+
+N_THETA = 11
 
 
 def theta_to_params(theta) -> ModelParameters:
@@ -69,17 +73,19 @@ def theta_to_params(theta) -> ModelParameters:
     lam = float(np.clip(expit(theta[7]), 0.0, 1.0))
     tau = float(np.clip(expit(theta[8]), 0.0, 1.0))
     beta_enc_g = float(np.clip(expit(theta[9]), eps, 1.0 - eps))
+    w_global = float(np.clip(expit(theta[10]), 0.0, 1.0))
     return ModelParameters(
         beta_enc=beta_enc, beta_enc_global=beta_enc_g,
         beta_story=beta_list, gamma_fc=gamma_fc, k=k,
         beta_rec=beta_rec, epsilon_d=epsilon_d, beta_rein=beta_rein,
-        lambda_reinstate=lam, tau_init=tau, paradigm="free_recall",
+        lambda_reinstate=lam, tau_init=tau, w_global=w_global,
+        paradigm="free_recall",
     )
 
 
 def params_to_theta(p: ModelParameters) -> np.ndarray:
     eps = 1e-6
-    theta = np.zeros(10, dtype=np.float64)
+    theta = np.zeros(N_THETA, dtype=np.float64)
     theta[0] = logit(np.clip(p.beta_enc, eps, 1.0 - eps))
     theta[1] = logit(np.clip(p.beta_list / p.beta_enc, eps, 1.0 - eps))
     theta[2] = logit(np.clip(p.gamma_fc, eps, 1.0 - eps))
@@ -90,6 +96,7 @@ def params_to_theta(p: ModelParameters) -> np.ndarray:
     theta[7] = logit(np.clip(p.lambda_reinstate, eps, 1.0 - eps))
     theta[8] = logit(np.clip(p.tau_init, eps, 1.0 - eps))
     theta[9] = logit(np.clip(p.beta_enc_global, eps, 1.0 - eps))
+    theta[10] = logit(np.clip(p.w_global, eps, 1.0 - eps))
     return theta
 
 
@@ -185,6 +192,7 @@ def main() -> int:
         beta_enc=0.679, beta_enc_global=0.4, beta_story=0.400,
         gamma_fc=0.315, k=6.50, beta_rec=0.326, epsilon_d=1.04,
         beta_rein=0.300, lambda_reinstate=0.5, tau_init=0.3,
+        w_global=0.3,
         paradigm="free_recall",
     )
     theta_init = params_to_theta(p0)
@@ -209,7 +217,7 @@ def main() -> int:
         if r == 0:
             theta0 = theta_init.copy()
         else:
-            theta0 = theta_init + rng.normal(0, args.restart_std, size=10)
+            theta0 = theta_init + rng.normal(0, args.restart_std, size=N_THETA)
         t_r = time.perf_counter()
         res = minimize(
             nll, theta0, method="L-BFGS-B",
@@ -238,7 +246,7 @@ def main() -> int:
     log_lines.append("MLE parameters:")
     for name in ("beta_enc", "beta_enc_global", "beta_story", "gamma_fc", "k",
                  "beta_rec", "epsilon_d", "beta_rein",
-                 "lambda_reinstate", "tau_init"):
+                 "lambda_reinstate", "tau_init", "w_global"):
         log_lines.append(f"  {name} = {getattr(best_params, name):.4f}")
 
     log_path.write_text("\n".join(log_lines) + "\n")
@@ -265,6 +273,7 @@ def main() -> int:
             "beta_rein": float(best_params.beta_rein),
             "lambda_reinstate": float(best_params.lambda_reinstate),
             "tau_init": float(best_params.tau_init),
+            "w_global": float(best_params.w_global),
         },
         "theta_mle": [float(x) for x in best_theta],
     }

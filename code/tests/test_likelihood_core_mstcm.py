@@ -227,36 +227,39 @@ def _oracle_mstcm_ll(p, W, K, cat_indices, recall_sps, recall_mask):
             log_p_story = _log_softmax_masked(k * story_acts, cand_mask)
             cum_beta += float(log_p_story[s_hat])
 
-            # Within-storyline recall.
-            c_ret_s = _onehot(d, 0)  # option ii: e_start
+            # Within-storyline recall: c_ret_s = e_start (option ii).
+            c_ret_s = _onehot(d, 0)
             in_story = np.array(
                 [int(cat_indices[sp_idx]) == s_hat for sp_idx in range(W)],
                 dtype=bool,
             )
+            # Effective matrices mixing per-storyline + global by w_global.
+            wg = float(p.w_global)
+            m_cf_eff = (1.0 - wg) * m_cf_s[s_hat] + wg * m_cf_g
+            m_fc_eff = (1.0 - wg) * m_fc_s[s_hat] + wg * m_fc_g
+
             for i in rec_indices:
                 sp = int(recall_sps[i])
                 idx = max(0, min(W - 1, sp - 1))
                 if already_b[idx]:
                     continue
-                # Stopping uses storyline matrix; out-of-storyline items
-                # are zero-rows in m_cf_s[s_hat] anyway, but we mask them
-                # explicitly for softmax.
                 already_for_stop = already_b | ~in_story
-                ps = _p_stop(m_cf_s[s_hat], c_ret_s, already_for_stop, eps_d)
+                ps = _p_stop(m_cf_eff, c_ret_s, already_for_stop, eps_d)
                 cum_beta += float(np.log(max(1.0 - ps, 1e-300)))
-                a = m_cf_s[s_hat] @ c_ret_s
+                a = m_cf_eff @ c_ret_s
                 keep = in_story & ~already_b
                 log_p = _log_softmax_masked(k * a, keep)
                 cum_beta += float(log_p[idx])
-                # Drift Decision 2X: drift both contexts.
-                c_in_s = _c_IN_rec(idx, m_fc_s[s_hat], gamma_fc, d)
+                # Drift Decision 2X: drift both contexts. Within uses
+                # mixed matrix; global uses M^FC_G.
+                c_in_s = _c_IN_rec(idx, m_fc_eff, gamma_fc, d)
                 c_ret_s = _drift(c_ret_s, c_in_s, beta_rec)
                 c_in_g = _c_IN_rec(idx, m_fc_g, gamma_fc, d)
                 c_ret_g = _drift(c_ret_g, c_in_g, beta_rec)
                 already_b[idx] = True
 
             already_for_stop = already_b | ~in_story
-            ps_end = _p_stop(m_cf_s[s_hat], c_ret_s, already_for_stop, eps_d)
+            ps_end = _p_stop(m_cf_eff, c_ret_s, already_for_stop, eps_d)
             cum_beta += float(np.log(max(ps_end, 1e-300)))
             last_s = s_hat
 
@@ -276,13 +279,14 @@ def _oracle_mstcm_ll(p, W, K, cat_indices, recall_sps, recall_mask):
 
 def _default_params(
     beta_enc_global=0.4,
-    lambda_reinstate=0.5, tau_init=0.5,
+    lambda_reinstate=0.5, tau_init=0.5, w_global=0.0,
 ):
     return ModelParameters(
         beta_enc=0.679, beta_enc_global=beta_enc_global, beta_story=0.400,
         gamma_fc=0.315, k=6.50, beta_rec=0.326, epsilon_d=1.04,
         beta_rein=0.300,
         lambda_reinstate=lambda_reinstate, tau_init=tau_init,
+        w_global=w_global,
         paradigm="free_recall",
     )
 
@@ -312,17 +316,20 @@ def _blocked_cat_indices(W, K):
 
 @pytest.mark.parametrize("seed", list(range(5)))
 @pytest.mark.parametrize("K", [2, 4])
-@pytest.mark.parametrize("tau,lam", [
-    (0.0, 0.0),
-    (0.5, 0.5),
-    (0.9, 0.0),
-    (0.3, 0.8),
+@pytest.mark.parametrize("tau,lam,wg", [
+    (0.0, 0.0, 0.0),   # all-off baseline
+    (0.5, 0.5, 0.0),   # tau + lam, strict (w_global = 0)
+    (0.9, 0.0, 0.0),   # tau dominant, strict
+    (0.3, 0.8, 0.0),   # lambda-heavy, strict
+    (0.5, 0.5, 0.3),   # soft hierarchy (w_global = 0.3)
+    (0.5, 0.5, 0.7),   # softer hierarchy (w_global = 0.7)
+    (0.5, 0.5, 1.0),   # full global (w_global = 1)
 ])
-def test_mstcm_matches_oracle(seed, K, tau, lam):
-    """MS-TCM core LL matches naive oracle to 1e-10."""
+def test_mstcm_matches_oracle(seed, K, tau, lam, wg):
+    """MS-TCM core LL matches naive oracle to 1e-10 across (τ, λ, w_global)."""
     rng = np.random.default_rng(seed * 13 + K)
     W = 8 if K == 2 else 12
-    p = _default_params(lambda_reinstate=lam, tau_init=tau)
+    p = _default_params(lambda_reinstate=lam, tau_init=tau, w_global=wg)
     cat_indices = _blocked_cat_indices(W, K)
     recall_sps, recall_mask = _random_recalls(rng, W)
 
@@ -333,8 +340,8 @@ def test_mstcm_matches_oracle(seed, K, tau, lam):
     assert np.isclose(ll_oracle, ll_core, atol=1e-10, rtol=0), (
         f"core diverges from oracle: oracle={ll_oracle!r}, core={ll_core!r}, "
         f"diff={ll_oracle - ll_core!r}\n"
-        f"  W={W} K={K} τ={tau} λ={lam} cat={cat_indices.tolist()} "
-        f"recalls={recall_sps.tolist()}"
+        f"  W={W} K={K} τ={tau} λ={lam} w_global={wg} "
+        f"cat={cat_indices.tolist()} recalls={recall_sps.tolist()}"
     )
 
 

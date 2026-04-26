@@ -64,14 +64,19 @@ from ms_tcm._likelihood_shared import (
 
 @dataclass(frozen=True)
 class MSCoreHyperparams:
-    """Scalar MS-TCM MS-TCM parameters.
+    """Scalar MS-TCM parameters.
 
-    Inherited from C&Z + pre-consolidation MS-TCM:
-        beta_enc, beta_list, beta_rec, beta_rein, gamma_fc, k, epsilon_d,
-        lambda_reinstate, tau_init.
+    Inherited from C&Z 2025:
+        beta_enc, beta_list, beta_rec, beta_rein, gamma_fc, k, epsilon_d.
 
     NEW in MS-TCM:
         beta_enc_global ∈ (0, 1): global cross-storyline encoding drift.
+        lambda_reinstate ∈ [0, 1]: storyline-return reinstatement strength.
+        tau_init ∈ [0, 1]: storyline-init route probability at recall onset.
+        w_global ∈ [0, 1]: cross-storyline mixing weight at retrieval.
+            w_global = 0 → strict per-storyline separation during route β
+                            within-storyline phase.
+            w_global = 1 → within-storyline phase uses M^CF_G alone.
     """
 
     beta_enc: float
@@ -84,6 +89,7 @@ class MSCoreHyperparams:
     epsilon_d: float
     lambda_reinstate: float
     tau_init: float
+    w_global: float
 
     @classmethod
     def from_model_parameters(cls, p) -> "MSCoreHyperparams":
@@ -98,6 +104,7 @@ class MSCoreHyperparams:
             epsilon_d=float(p.epsilon_d),
             lambda_reinstate=float(p.lambda_reinstate),
             tau_init=float(p.tau_init),
+            w_global=float(p.w_global),
         )
 
 
@@ -568,44 +575,45 @@ def _ll_route_beta_numpy(
         e_start = at_set(e_start, 0, 1.0, xp)
         c_ret_s = e_start
 
+        # Effective matrices for within-storyline retrieval, mixing
+        # per-storyline (strict) with global (relaxed) by w_global.
+        # w_global = 0 → strict hierarchy (M^CF_s only).
+        # w_global = 1 → within-storyline phase uses M^CF_G alone.
+        wg = hp.w_global
+        m_cf_eff = (1.0 - wg) * m_cf_s[s_hat] + wg * m_cf_g
+        m_fc_eff = (1.0 - wg) * m_fc_s[s_hat] + wg * m_fc_g
+
+        # in_story_mask: items belonging to storyline s_hat. Computed
+        # once per visit, used for both stop-rule and softmax masking.
+        in_story_mask = xp.zeros(W, dtype=bool)
+        for sp_idx in range(W):
+            if int(cat_indices[sp_idx]) == s_hat:
+                in_story_mask = at_set(in_story_mask, sp_idx, True, xp)
+
         for j_in_visit, i in enumerate(rec_indices):
             sp = int(recall_sps[i])
             idx_w = max(0, min(W - 1, sp - 1))
             is_repeat = bool(already_mask[idx_w])
             if is_repeat:
                 continue
-            # Compute storyline-internal stopping rule using M^CF_s and
-            # the storyline's own already-recalled mask.
-            # The relevant items are those in storyline s_hat ONLY. The
-            # already-mask within storyline s_hat = (already_mask[i] for
-            # i where cat_indices[i]==s_hat).
-            # However, our M^CF_s has shape (W, d), indexed by global
-            # serial position. Items in OTHER storylines have zero rows
-            # in M^CF_s (no associations were built for them in storyline
-            # s_hat's matrix). So computing p_stop using M^CF_s and the
-            # full W-length already_mask just naturally restricts to
-            # storyline-s_hat items: the activations a_j for j in other
-            # storylines are 0 (since M^CF_s[j] = 0), contributing nothing
-            # to a_r or a_nr. But we do need to mask them as "not
-            # available" for softmax. Solve by building an "in-storyline"
-            # mask and combining.
-            in_story_mask = xp.zeros(W, dtype=bool)
-            for sp_idx in range(W):
-                if int(cat_indices[sp_idx]) == s_hat:
-                    in_story_mask = at_set(in_story_mask, sp_idx, True, xp)
             keep_mask = in_story_mask & ~already_mask
 
+            # Stop rule: a_r / a_nr decomposition restricted to in_story
+            # items (other-storyline items are masked OUT of the
+            # competition).
             p_stop = float(compute_p_stop(
-                m_cf_s[s_hat], c_ret_s, already_mask | ~in_story_mask,
+                m_cf_eff, c_ret_s, already_mask | ~in_story_mask,
                 hp.epsilon_d, xp,
             ))
             log_1m = float(xp.log(max(1.0 - p_stop, 1e-300)))
-            a = activation(m_cf_s[s_hat], c_ret_s, xp)
+            a = activation(m_cf_eff, c_ret_s, xp)
             log_p = log_softmax_masked(hp.k * a, keep_mask, xp)
             cum_ll += log_1m + float(log_p[idx_w])
 
             # Drift Decision 2X: drift BOTH c_ret_s and c_ret_g.
-            c_in_s = c_IN_rec_of(idx_w, m_fc_s[s_hat], hp.gamma_fc, d, xp, dtype)
+            # Within-storyline c_ret drift uses the mixed M^FC_eff so
+            # the c^IN_rec target reflects the same matrix mix.
+            c_in_s = c_IN_rec_of(idx_w, m_fc_eff, hp.gamma_fc, d, xp, dtype)
             c_ret_s = drift_c_ret(c_ret_s, c_in_s, hp.beta_rec, xp)
             c_in_g = c_IN_rec_of(idx_w, m_fc_g, hp.gamma_fc, d, xp, dtype)
             c_ret_g = drift_c_ret(c_ret_g, c_in_g, hp.beta_rec, xp)
@@ -614,13 +622,9 @@ def _ll_route_beta_numpy(
         # --- End-of-visit stop event ---
         # log p_stop at the storyline level (with the storyline's own
         # already-mask). This fires the visit boundary (or terminates
-        # recall on the last visit).
-        in_story_mask = xp.zeros(W, dtype=bool)
-        for sp_idx in range(W):
-            if int(cat_indices[sp_idx]) == s_hat:
-                in_story_mask = at_set(in_story_mask, sp_idx, True, xp)
+        # recall on the last visit). Uses the same effective matrix.
         p_stop_end = float(compute_p_stop(
-            m_cf_s[s_hat], c_ret_s,
+            m_cf_eff, c_ret_s,
             already_mask | ~in_story_mask, hp.epsilon_d, xp,
         ))
         cum_ll += float(xp.log(max(p_stop_end, 1e-300)))
@@ -780,6 +784,12 @@ def simulate_recalls_mstcm(
 
         in_story_mask = in_story_masks[s_hat]
 
+        # Effective matrices for within-storyline retrieval, mixing
+        # per-storyline (strict) with global (relaxed) by w_global.
+        wg = hp.w_global
+        m_cf_eff = (1.0 - wg) * m_cf_s[s_hat] + wg * m_cf_g
+        m_fc_eff = (1.0 - wg) * m_fc_s[s_hat] + wg * m_fc_g
+
         # Track whether the visit produced any new recall (defensive
         # guard against pathological p_stop=1 cases that would otherwise
         # leave len(recalls) unchanged across visits).
@@ -790,12 +800,12 @@ def simulate_recalls_mstcm(
             if not keep_mask.any():
                 break  # all storyline-ŝ items already recalled
             p_stop = float(compute_p_stop(
-                m_cf_s[s_hat], c_ret_s,
+                m_cf_eff, c_ret_s,
                 already_mask | ~in_story_mask, hp.epsilon_d, np,
             ))
             if rng.random() < p_stop:
                 break
-            a = activation(m_cf_s[s_hat], c_ret_s, np)
+            a = activation(m_cf_eff, c_ret_s, np)
             log_p = log_softmax_masked(hp.k * a, keep_mask, np)
             p = np.exp(log_p - log_p.max())
             p = np.where(keep_mask, p, 0.0)
@@ -805,8 +815,9 @@ def simulate_recalls_mstcm(
             idx = int(rng.choice(W, p=p))
             recalls.append(idx + 1)
             already_mask[idx] = True
-            # Drift both contexts (Decision 2X).
-            c_in_s = c_IN_rec_of(idx, m_fc_s[s_hat], hp.gamma_fc, d, np, np.float64)
+            # Drift both contexts (Decision 2X). Within-storyline c_ret
+            # uses the mixed M^FC_eff; global c_ret uses M^FC_G.
+            c_in_s = c_IN_rec_of(idx, m_fc_eff, hp.gamma_fc, d, np, np.float64)
             c_ret_s = drift_c_ret(c_ret_s, c_in_s, hp.beta_rec, np)
             c_in_g = c_IN_rec_of(idx, m_fc_g, hp.gamma_fc, d, np, np.float64)
             c_ret_g = drift_c_ret(c_ret_g, c_in_g, hp.beta_rec, np)

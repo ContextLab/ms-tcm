@@ -91,13 +91,13 @@ def _load_mstcm_fitted_params(
         return None
     summary = json.loads(fit_path.read_text())
     pp = summary["parameters"]
-    # ``beta_enc_global`` is new in the consolidated MS-TCM. If a stale
-    # fit summary lacks it, fall back to ``beta_list`` (a reasonable
-    # default reflecting the global cross-storyline drift rate).
+    # ``beta_enc_global`` and ``w_global`` are newer fields. If a stale
+    # fit summary lacks them, fall back to sensible defaults.
     beta_enc_global = pp.get(
         "beta_enc_global",
         pp.get("beta_list", 0.4),
     )
+    w_global = pp.get("w_global", 0.0)
     params = ModelParameters(
         beta_enc=pp["beta_enc"],
         beta_enc_global=beta_enc_global,
@@ -109,6 +109,7 @@ def _load_mstcm_fitted_params(
         beta_rein=pp["beta_rein"],
         lambda_reinstate=pp["lambda_reinstate"],
         tau_init=pp["tau_init"],
+        w_global=w_global,
         paradigm="free_recall",
     )
     return (
