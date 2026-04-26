@@ -393,6 +393,144 @@ detailed pseudo-code once OQ1-OQ3 are resolved.
 
 ---
 
+## Behavioral diagnostics (2026-04-26)
+
+Two empirical investigations of FRFR-category by behavioral-data agents
+sharpened our understanding of what Iteration 2 needs to capture.
+Detailed notes at `notes/clustering_analysis.md` and
+`notes/late_list_scallop_analysis.md`; figures in
+`notes/clustering_analysis_figures/` and
+`notes/late_list_scallop_figures/`.
+
+### Finding 1: lag-CRP difference is a composition shift
+
+When the lag-CRP is decomposed into within-category vs across-category
+transitions, the two transition types have **identical** lag-CRP shapes
+in early and late lists (within-cat: ~0.55 at lag +1 for both halves;
+across-cat: ~0.21 at lag +1 for both halves). The overall lag-CRP
+difference between halves comes entirely from the proportion mix:
+
+- Early lists: 57% of transitions are within-category (peaked at +1)
+- Late lists: 38% of transitions are within-category
+
+So the "tighter clustering in early lists" = "more within-category
+transitions in early lists." The within-category lag-CRP is identical;
+what changes is how often participants make within-category transitions.
+
+In sorted lists, within-category items are also temporally adjacent
+(consecutively presented), so a within-category transition mechanically
+produces a |lag|=1 transition. In random lists, within-category items
+are scattered, so a within-category transition produces a wide range of
+lags (mean ≈ 4-5).
+
+Statistical evidence:
+- TCS (temporal clustering score): early 0.743 vs late 0.602
+  (Cohen's d = 1.33, p = 4.8 × 10⁻⁸)
+- SCS (semantic clustering score, Polyn et al. 2009): early 0.373 vs
+  late 0.197 (Cohen's d = 1.77, p = 1.4 × 10⁻¹⁰)
+- TCS-SCS within-participant correlation: r = +0.72 in early lists
+  (mechanisms align), r = -0.53 in late lists (mechanisms compete).
+  This is consistent with TCS and SCS being driven by ONE underlying
+  recall-organization process (people who organize by category get
+  high SCS; in sorted lists this also produces high TCS; in random
+  lists, organizing by category SACRIFICES temporal clustering).
+
+### Finding 2: late-list scallop is real and category-organized
+
+The late-list SPC scallop (peaks at 1, 5, 9, 13) is statistically
+robust (permutation p = 0.001). It is FULLY explained by category-
+organized recall:
+
+- Within-category run length: late = 1.66 (well above null = 1.0,
+  Cohen's d = 1.47 vs early = 2.27)
+- Within-category transition rate: late = 0.38 (1.91× chance,
+  p < 0.001)
+- Category-rank decomposition: SPC predicted from per-rank histograms
+  (where rank = "i-th item recalled within a category") matches
+  observed late SPC at r = 0.999.
+
+The Rank-1 panel of the rank decomposition shows the key signature:
+the FIRST item recalled from each category has a strong primacy bias
+(disproportionately at sp=1). When this is averaged across 4 categories
+that are scattered across the list, you get scallop peaks at the
+expected positions because Rank-1 items also tend to occupy the early
+positions of their categories.
+
+Output-position chunking (recalls grouped in chunks of 4 by output
+position, regardless of category) was REJECTED: intra-chunk SP variance
+on late lists (19.82) is close to the random null (22.71) — chunks
+do NOT access spatially coherent regions of the list.
+
+### Implications for Iteration 2
+
+The two findings converge on a single mechanism: **participants
+organize their recall by category regardless of presentation order**.
+This is what produces both the lag-CRP composition shift AND the
+late-list scallop. Iteration 2 should reproduce this organization
+because:
+
+1. ✓ The strict-hierarchical retrieval (route β: global cues storyline,
+   storyline cues events) ALREADY enforces category-organized recall
+   when route β fires. This is the right mechanism.
+
+2. The **τ mixture parameter** controls how often route β fires.
+   Behavioral evidence suggests this should be HIGH in BOTH early
+   and late lists (since participants organize by category in both —
+   the run length in late lists is 1.66, well above 1.0). Earlier
+   MS-TCM v1 fit found τ ≈ 0.41, which is plausibly underestimated
+   if the model can't fully capture the organization.
+
+3. Within-category retrieval (the "storyline cue") should produce
+   the within-category mini-SPC visible in the rank-1 decomposition.
+   Pure within-storyline primacy (OQ3=ii, c_ret_s = e_start) might
+   over-predict — participants don't always start within a category
+   from the first item; some randomness exists. Option (iii)
+   c_ret_s = M^lists_G[ŝ] (cached storyline-list context) might
+   better capture the modest within-category primacy + recency
+   pattern visible in the data. Worth testing both.
+
+4. The **storyline-exhaustion mechanism** (only-immediately-preceding
+   excluded) is consistent with the run-length data: median
+   within-category run length is ~2-3, and people DO return to
+   categories after intervening visits.
+
+### Diagnostic targets for Iteration 2 fits
+
+When fitting MS-TCM v2, evaluate against:
+- Within-category lag-CRP shape (should be ~0.55 at +1, with forward
+  asymmetry)
+- Across-category lag-CRP shape (should be ~0.21 at +1, with forward
+  asymmetry)
+- Fraction of within-category transitions in early vs late lists
+  (should reproduce the 57% / 38% split)
+- Within-category run length (should reproduce 2.27 / 1.66 split)
+- Late-list scallop amplitude (~0.074 between peaks and troughs)
+- pFR primacy spike at sp=1 (~0.27 in both halves)
+
+A good Iteration-2 model gets 4-5 of these right; a great one gets
+all 6.
+
+### Outstanding question (for Iteration N+1)
+
+Why is participants' tendency to organize by category SOMEWHAT
+weaker on late lists (run length 1.66 vs 2.27)? Not just structural —
+even adjusting for the random presentation order, participants seem
+less aggressive about category clustering on late lists. Possibilities:
+- Practice effects: late lists come second, fatigue.
+- Strategy weakening when categories are random (less obvious to
+  re-impose category order).
+- Individual differences in strategy adoption (Participant 12 in the
+  raw-sequence inspection showed near-serial recall while
+  Participant 7 showed perfect category blocking).
+
+The model currently has no mechanism for early-vs-late strategy
+shifts. If we want to capture both halves with ONE parameter set,
+that's a constraint on Iteration 2. Alternatively, we could fit
+the two halves with different τ values, treating the early/late
+split as a session-effect dimension.
+
+---
+
 ## Iteration N (placeholder)
 
 When we propose further changes, append a new `## Iteration N`
