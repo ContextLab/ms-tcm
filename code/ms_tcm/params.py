@@ -82,12 +82,28 @@ class ModelParameters:
     """Storyline-return reinstatement strength — NEW in MS-TCM.
 
     Source: notes/two_level_cmr_v6.pdf §5 (λ = 0.80 initialization). v6 §2.4
-    Eq 6. This is the sole mechanism MS-TCM adds on top of Cornell & Zhang
-    2025's hierarchical CMR.
+    Eq 6. When a storyline resumes after interruption, the storyline
+    context is blended with its cached pre-departure value:
+    c^story_s ← λ · c̃^story_s + (1−λ) · c^story_s_prev. Disabled (=0)
+    under the C&Z baseline.
 
     Python identifier ``lambda_reinstate`` because ``lambda`` is a reserved
     Python keyword (see notes/v6_migration.md for the symbol-vs-identifier
     convention).
+    """
+
+    tau_init: float = 0.0
+    """Storyline-initiation mixture probability — NEW in MS-TCM (this work).
+
+    At recall onset, the model selects the storyline-initiation route
+    with probability τ and the standard recency-initiation route with
+    probability 1-τ. Under storyline-init, a storyline ŝ is sampled
+    via softmax(k · M^SC · c^list_end) and the first-recall cue is
+    set to c^story_ŝ instead of c^item_end.
+
+    τ = 0 reduces MS-TCM to C&Z 2025 (single recency-initiation cue).
+    Disabled by default; enable for the multi-storyline / categorical
+    MS-TCM variant.
     """
 
     # --- Free-recall-only parameters ---
@@ -182,6 +198,10 @@ class ModelParameters:
         if not (0.0 <= self.lambda_reinstate <= 1.0):
             raise ValueError(
                 f"lambda_reinstate must be in [0, 1]; got {self.lambda_reinstate!r}"
+            )
+        if not (0.0 <= self.tau_init <= 1.0):
+            raise ValueError(
+                f"tau_init must be in [0, 1]; got {self.tau_init!r}"
             )
         if not (0.0 <= self.beta_rein <= 1.0):
             raise ValueError(

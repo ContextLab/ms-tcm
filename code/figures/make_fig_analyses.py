@@ -1,12 +1,17 @@
 """Figure 3: serial-position curve, probability of first recall, lag-CRP.
 
 Each panel overlays observed FRFR-category data with predicted bands from
-the Cornell & Zhang 2025 hierarchical free-recall model. The model is
-parameterized by an MLE fit to FRFR-category if available
-(``data/processed/fits/cz_frfr/fit_summary.json``); otherwise falls back
-to C&Z's published Table 1 values.
+both models:
 
-Inspired by Manning et al. 2023 FRFR Fig. 3 and H&K 2002 Fig. 1.
+- **C&Z 2025** hierarchical free-recall (baseline): single-cue retrieval
+  with hierarchical fallback to e_start. Parameters from
+  ``data/processed/fits/cz_frfr/fit_summary.json`` (MLE on FRFR), or
+  C&Z's published Table 1 values if no fit summary is available.
+- **MS-TCM** (multi-storyline TCM, this work): C&Z + per-storyline
+  contexts + λ storyline-return reinstatement + τ storyline-initiation
+  mixture. Parameters from
+  ``data/processed/fits/mstcm_frfr/fit_summary.json``. Overlay only
+  appears if this fit summary is available.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ import pyarrow as pa
 
 from ms_tcm import Dataset, load_frfr_category
 from ms_tcm._likelihood_core import simulate_recalls
+from ms_tcm._likelihood_core_mstcm import simulate_recalls_mstcm
 from ms_tcm.params import ModelParameters
 
 # Figure scripts live under code/figures/ and import sibling helpers under
@@ -49,11 +55,7 @@ CZ_TABLE_1 = ModelParameters(
 def _load_fitted_params(
     fit_path: Path = Path("data/processed/fits/cz_frfr/fit_summary.json"),
 ) -> tuple[ModelParameters, str, float | None]:
-    """Load MLE parameters from fit_summary.json if present.
-
-    Returns ``(params, label, log_likelihood_or_None)``. Falls back to
-    C&Z Table 1 values when the fit summary is missing.
-    """
+    """Load C&Z MLE parameters from fit_summary.json if present."""
     if not fit_path.exists():
         return (
             CZ_TABLE_1,
@@ -64,13 +66,14 @@ def _load_fitted_params(
     pp = summary["parameters"]
     params = ModelParameters(
         beta_enc=pp["beta_enc"],
-        beta_story=pp["beta_list"],   # = beta_story field in our schema
+        beta_story=pp["beta_list"],
         gamma_fc=pp["gamma_fc"],
         k=pp["k"],
         beta_rec=pp["beta_rec"],
         epsilon_d=pp["epsilon_d"],
         beta_rein=pp["beta_rein"],
         lambda_reinstate=0.0,
+        tau_init=0.0,
         paradigm="free_recall",
     )
     return (
@@ -80,19 +83,46 @@ def _load_fitted_params(
     )
 
 
+def _load_mstcm_fitted_params(
+    fit_path: Path = Path("data/processed/fits/mstcm_frfr/fit_summary.json"),
+) -> tuple[ModelParameters, str, float | None] | None:
+    """Load MS-TCM MLE parameters; return None if no fit summary exists."""
+    if not fit_path.exists():
+        return None
+    summary = json.loads(fit_path.read_text())
+    pp = summary["parameters"]
+    params = ModelParameters(
+        beta_enc=pp["beta_enc"],
+        beta_story=pp["beta_list"],
+        gamma_fc=pp["gamma_fc"],
+        k=pp["k"],
+        beta_rec=pp["beta_rec"],
+        epsilon_d=pp["epsilon_d"],
+        beta_rein=pp["beta_rein"],
+        lambda_reinstate=pp["lambda_reinstate"],
+        tau_init=pp["tau_init"],
+        paradigm="free_recall",
+    )
+    return (
+        params,
+        "MS-TCM (MLE)",
+        float(summary["log_likelihood"]),
+    )
+
+
 def _simulate_dataset(ds: Dataset, params: ModelParameters, *,
-                      n_seeds: int, master_seed: int) -> Dataset:
+                      n_seeds: int, master_seed: int,
+                      use_mstcm: bool = False) -> Dataset:
     """Sample synthetic recalls for every (participant, list) in ``ds``.
 
     Each (participant, list) is replicated ``n_seeds`` times with distinct
-    pseudo-participant ids so the downstream curve estimators see N×n_seeds
-    independent simulated lists.
+    pseudo-participant ids so the downstream curve estimators see
+    N×n_seeds independent simulated lists.
 
-    The C&Z hierarchical free-recall sampler treats each list as a single
-    storyline (we ignore FRFR-category's category structure for this
-    figure — that's a deliberate simplification: C&Z's model has no
-    storyline-level mechanism, so we apply its single-list free-recall
-    behavior to each FRFR list independently).
+    When ``use_mstcm=False`` the C&Z sampler runs (single-storyline,
+    ignores category labels). When ``use_mstcm=True`` the MS-TCM sampler
+    runs with per-list cat_indices derived from the ``category`` column
+    (one storyline per unique category in order of first appearance).
     """
     pdf = ds.presented.to_pandas()
     keys = sorted(set(zip(pdf["participant"].tolist(), pdf["list"].tolist())))
@@ -114,7 +144,25 @@ def _simulate_dataset(ds: Dataset, params: ModelParameters, *,
                 rng_master.integers(0, 2**31 - 1) + seed * 997
                 + int(part) * 37 + int(lst),
             )
-            recalls = simulate_recalls(params, W=W, rng=rng)
+
+            if use_mstcm:
+                # Build cat_indices from the category column.
+                cat_to_idx = {}
+                cat_seq = sub_pres["category"].tolist()
+                for c in cat_seq:
+                    if c not in cat_to_idx:
+                        cat_to_idx[c] = len(cat_to_idx)
+                cat_indices = np.array(
+                    [cat_to_idx[c] for c in cat_seq], dtype=np.int64,
+                )
+                K = len(cat_to_idx)
+                recalls = simulate_recalls_mstcm(
+                    params, W=W, K=K,
+                    cat_indices=cat_indices, rng=rng,
+                )
+            else:
+                recalls = simulate_recalls(params, W=W, rng=rng)
+
             for out_pos, sp in enumerate(recalls, start=1):
                 word_row = sub_pres[sub_pres["serial_position"] == sp].iloc[0]
                 rec_rows.append({
@@ -140,7 +188,8 @@ def _simulate_dataset(ds: Dataset, params: ModelParameters, *,
 
 
 def _draw_band(ds: Dataset, params: ModelParameters, *,
-               n_draws: int, seed: int, observe_fn):
+               n_draws: int, seed: int, observe_fn,
+               use_mstcm: bool = False):
     """Compute (median, lo, hi) percentile band for a per-dataset summary.
 
     For each of ``n_draws`` independent simulations of the full dataset,
@@ -149,7 +198,10 @@ def _draw_band(ds: Dataset, params: ModelParameters, *,
     """
     curves = []
     for d in range(n_draws):
-        ds_sim = _simulate_dataset(ds, params, n_seeds=1, master_seed=seed + d)
+        ds_sim = _simulate_dataset(
+            ds, params, n_seeds=1, master_seed=seed + d,
+            use_mstcm=use_mstcm,
+        )
         curves.append(observe_fn(ds_sim))
     arr = np.stack(curves, axis=0)
     return (
@@ -157,6 +209,69 @@ def _draw_band(ds: Dataset, params: ModelParameters, *,
         np.percentile(arr, 5, axis=0),
         np.percentile(arr, 95, axis=0),
     )
+
+
+def _filter_to_participant(ds: Dataset, p: int) -> Dataset:
+    """Return a Dataset containing only data from one participant."""
+    pdf_full = ds.presented.to_pandas()
+    rdf_full = ds.recalled.to_pandas()
+    pdf = pdf_full[pdf_full["participant"] == p].reset_index(drop=True)
+    rdf = rdf_full[rdf_full["participant"] == p].reset_index(drop=True)
+    return Dataset(
+        presented=pa.Table.from_pandas(pdf, preserve_index=False),
+        recalled=pa.Table.from_pandas(rdf, preserve_index=False),
+        manifest=ds.manifest,
+    )
+
+
+def _per_participant_curves(ds: Dataset, observe_fn) -> np.ndarray:
+    """Apply ``observe_fn`` per participant; return (n_participants, K) array.
+
+    Used to compute across-subjects 95% confidence intervals on observed
+    behavioral curves.
+    """
+    pdf = ds.presented.to_pandas()
+    parts = sorted(pdf["participant"].unique().tolist())
+    rows = []
+    for p in parts:
+        ds_p = _filter_to_participant(ds, int(p))
+        rows.append(observe_fn(ds_p))
+    return np.stack(rows, axis=0)
+
+
+def _observed_band(
+    ds: Dataset, observe_fn, *, n_bootstraps: int = 2000, seed: int = 0,
+):
+    """Compute (mean, lo95, hi95) bootstrap CI of the across-subjects mean.
+
+    Procedure:
+      1. Compute one curve per participant (pooled across that participant's
+         lists) → ``per_participant`` of shape (n_subjects, K).
+      2. Bootstrap-resample participants (with replacement) ``n_bootstraps``
+         times; for each resample, take the per-position MEAN across those
+         resampled participants.
+      3. Mean is the empirical across-participant mean of the original
+         per-participant curves; 95% CI is the [2.5, 97.5] percentiles of
+         the bootstrap distribution of resampled means.
+
+    This is a standard bootstrap CI on the across-subjects mean (much
+    narrower than the [2.5, 97.5] of the raw per-subject curves, which
+    reflects between-subject DISPERSION, not the precision of the mean).
+    """
+    per_participant = _per_participant_curves(ds, observe_fn)
+    n_subjects = per_participant.shape[0]
+    rng = np.random.default_rng(seed)
+
+    boot_means = np.empty((n_bootstraps, per_participant.shape[1]),
+                          dtype=np.float64)
+    for b in range(n_bootstraps):
+        idx = rng.integers(0, n_subjects, size=n_subjects)
+        boot_means[b] = np.nanmean(per_participant[idx], axis=0)
+
+    mean = np.nanmean(per_participant, axis=0)
+    lo = np.nanpercentile(boot_means, 2.5, axis=0)
+    hi = np.nanpercentile(boot_means, 97.5, axis=0)
+    return mean, lo, hi
 
 
 def main() -> int:
@@ -198,12 +313,18 @@ def main() -> int:
         )
         print(f"  {name} = {val:.4f}")
 
-    print("Computing observed measures (FRFR-category)...")
-    obs_spc = serial_position.observed(ds)
-    obs_pfr = pfr.observed(ds)
-    obs_crp = lag_crp.observed(ds)
+    print("Computing observed measures + 95% CI across subjects...")
+    obs_spc_mean, obs_spc_lo, obs_spc_hi = _observed_band(
+        ds, serial_position.observed,
+    )
+    obs_pfr_mean, obs_pfr_lo, obs_pfr_hi = _observed_band(
+        ds, pfr.observed,
+    )
+    obs_crp_mean, obs_crp_lo, obs_crp_hi = _observed_band(
+        ds, lag_crp.observed,
+    )
 
-    print(f"Drawing {args.n_draws} synthetic datasets...")
+    print(f"Drawing {args.n_draws} synthetic datasets via C&Z...")
     band_spc = _draw_band(
         ds, params, n_draws=args.n_draws, seed=args.seed,
         observe_fn=serial_position.observed,
@@ -217,51 +338,135 @@ def main() -> int:
         observe_fn=lag_crp.observed,
     )
 
+    # Try to load MS-TCM fit and compute its bands too.
+    mstcm_loaded = _load_mstcm_fitted_params()
+    if mstcm_loaded is not None:
+        params_mstcm, label_mstcm, ll_mstcm = mstcm_loaded
+        print(f"\nUsing MS-TCM parameters: {label_mstcm}")
+        if ll_mstcm is not None:
+            print(f"  fit log-likelihood: {ll_mstcm:.2f}")
+        for name in ("beta_enc", "beta_list", "gamma_fc", "k", "beta_rec",
+                     "epsilon_d", "beta_rein", "lambda_reinstate", "tau_init"):
+            val = getattr(params_mstcm, name) if hasattr(
+                params_mstcm, name,
+            ) else getattr(params_mstcm, "beta_story")
+            print(f"  {name} = {val:.4f}")
+
+        print(f"Drawing {args.n_draws} synthetic datasets via MS-TCM...")
+        band_spc_mstcm = _draw_band(
+            ds, params_mstcm, n_draws=args.n_draws, seed=args.seed,
+            observe_fn=serial_position.observed, use_mstcm=True,
+        )
+        band_pfr_mstcm = _draw_band(
+            ds, params_mstcm, n_draws=args.n_draws, seed=args.seed,
+            observe_fn=pfr.observed, use_mstcm=True,
+        )
+        band_crp_mstcm = _draw_band(
+            ds, params_mstcm, n_draws=args.n_draws, seed=args.seed,
+            observe_fn=lag_crp.observed, use_mstcm=True,
+        )
+    else:
+        params_mstcm = label_mstcm = ll_mstcm = None
+        band_spc_mstcm = band_pfr_mstcm = band_crp_mstcm = None
+
     fig, axes = plt.subplots(1, 3, figsize=(11, 3.2))
     positions = np.arange(1, W + 1)
-    cz_color = "#d62728"
+    cz_color = "#d62728"        # red — C&Z baseline
+    mstcm_color = "#1f77b4"     # blue — MS-TCM
+    obs_color = "black"
 
-    # Panel A: serial-position curve.
+    # Panel order follows the recall narrative:
+    #   A: pFR     — where do you START recalling?
+    #   B: lag-CRP — how do you TRANSITION from one recall to the next?
+    #   C: SPC     — what do you recall OVERALL?
+
+    # Panel A: pFR.
     ax = axes[0]
-    ax.plot(positions, obs_spc, "o-", color="black",
-            label="observed", markersize=3.5, linewidth=1.0)
-    m, lo, hi = band_spc
-    ax.plot(positions, m, "--", color=cz_color,
-            label=label, linewidth=1.0)
-    ax.fill_between(positions, lo, hi, color=cz_color, alpha=0.2)
-    ax.set_xlabel("serial position")
-    ax.set_ylabel("P(recall)")
-    ax.set_title("A. Serial-position curve")
-    ax.legend(fontsize=8, loc="best")
-
-    # Panel B: PFR.
-    ax = axes[1]
-    ax.plot(positions, obs_pfr, "o-", color="black",
-            label="observed", markersize=3.5, linewidth=1.0)
+    ax.plot(positions, obs_pfr_mean, "o-", color=obs_color,
+            label="observed (mean ± 95% CI)", markersize=3.5, linewidth=1.0)
+    ax.fill_between(positions, obs_pfr_lo, obs_pfr_hi,
+                    color=obs_color, alpha=0.15, linewidth=0)
     m, lo, hi = band_pfr
     ax.plot(positions, m, "--", color=cz_color,
             label=label, linewidth=1.0)
     ax.fill_between(positions, lo, hi, color=cz_color, alpha=0.2)
+    if band_pfr_mstcm is not None:
+        m, lo, hi = band_pfr_mstcm
+        ax.plot(positions, m, "--", color=mstcm_color,
+                label=label_mstcm, linewidth=1.0)
+        ax.fill_between(positions, lo, hi, color=mstcm_color, alpha=0.2)
     ax.set_xlabel("serial position")
     ax.set_ylabel("P(first recall)")
-    ax.set_title("B. Probability of first recall")
+    ax.set_title("A. Probability of first recall")
     ax.legend(fontsize=8, loc="best")
 
-    # Panel C: lag-CRP.
-    ax = axes[2]
+    # Panel B: lag-CRP.
+    # Lag = 0 is undefined (a transition cannot be to the same position),
+    # so we plot positive and negative lags as TWO SEPARATE curves rather
+    # than a single curve passing through 0.
+    ax = axes[1]
     lags = lag_crp.lag_axis(W)
-    keep = (np.abs(lags) >= 1) & (np.abs(lags) <= 5)
-    ax.plot(lags[keep], obs_crp[keep], "o-", color="black",
-            label="observed", markersize=3.5, linewidth=1.0)
+    neg_keep = (lags >= -5) & (lags <= -1)
+    pos_keep = (lags >= 1) & (lags <= 5)
+    lags_neg = lags[neg_keep]
+    lags_pos = lags[pos_keep]
+
+    # Observed (negative + positive curves).
+    ax.plot(lags_neg, obs_crp_mean[neg_keep], "o-", color=obs_color,
+            label="observed (mean ± 95% CI)", markersize=3.5, linewidth=1.0)
+    ax.fill_between(lags_neg, obs_crp_lo[neg_keep], obs_crp_hi[neg_keep],
+                    color=obs_color, alpha=0.15, linewidth=0)
+    ax.plot(lags_pos, obs_crp_mean[pos_keep], "o-", color=obs_color,
+            markersize=3.5, linewidth=1.0)
+    ax.fill_between(lags_pos, obs_crp_lo[pos_keep], obs_crp_hi[pos_keep],
+                    color=obs_color, alpha=0.15, linewidth=0)
+
+    # C&Z model bands (negative + positive curves).
     m, lo, hi = band_crp
-    ax.plot(lags[keep], m[keep], "--", color=cz_color,
+    ax.plot(lags_neg, m[neg_keep], "--", color=cz_color,
             label=label, linewidth=1.0)
-    ax.fill_between(lags[keep], lo[keep], hi[keep],
+    ax.fill_between(lags_neg, lo[neg_keep], hi[neg_keep],
                     color=cz_color, alpha=0.2)
-    ax.axhline(0, color="#bbb", linewidth=0.5)
+    ax.plot(lags_pos, m[pos_keep], "--", color=cz_color, linewidth=1.0)
+    ax.fill_between(lags_pos, lo[pos_keep], hi[pos_keep],
+                    color=cz_color, alpha=0.2)
+
+    # MS-TCM model bands (negative + positive curves).
+    if band_crp_mstcm is not None:
+        m, lo, hi = band_crp_mstcm
+        ax.plot(lags_neg, m[neg_keep], "--", color=mstcm_color,
+                label=label_mstcm, linewidth=1.0)
+        ax.fill_between(lags_neg, lo[neg_keep], hi[neg_keep],
+                        color=mstcm_color, alpha=0.2)
+        ax.plot(lags_pos, m[pos_keep], "--", color=mstcm_color,
+                linewidth=1.0)
+        ax.fill_between(lags_pos, lo[pos_keep], hi[pos_keep],
+                        color=mstcm_color, alpha=0.2)
+
+    ax.axvline(0, color="#bbb", linewidth=0.5, linestyle=":")
     ax.set_xlabel("lag")
     ax.set_ylabel("conditional response probability")
-    ax.set_title("C. Lag-CRP")
+    ax.set_title("B. Lag-CRP")
+    ax.legend(fontsize=8, loc="best")
+
+    # Panel C: SPC.
+    ax = axes[2]
+    ax.plot(positions, obs_spc_mean, "o-", color=obs_color,
+            label="observed (mean ± 95% CI)", markersize=3.5, linewidth=1.0)
+    ax.fill_between(positions, obs_spc_lo, obs_spc_hi,
+                    color=obs_color, alpha=0.15, linewidth=0)
+    m, lo, hi = band_spc
+    ax.plot(positions, m, "--", color=cz_color,
+            label=label, linewidth=1.0)
+    ax.fill_between(positions, lo, hi, color=cz_color, alpha=0.2)
+    if band_spc_mstcm is not None:
+        m, lo, hi = band_spc_mstcm
+        ax.plot(positions, m, "--", color=mstcm_color,
+                label=label_mstcm, linewidth=1.0)
+        ax.fill_between(positions, lo, hi, color=mstcm_color, alpha=0.2)
+    ax.set_xlabel("serial position")
+    ax.set_ylabel("P(recall)")
+    ax.set_title("C. Serial-position curve")
     ax.legend(fontsize=8, loc="best")
 
     fig.tight_layout()

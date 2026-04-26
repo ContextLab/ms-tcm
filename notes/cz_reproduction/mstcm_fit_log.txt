@@ -1,0 +1,20 @@
+# Fit MS-TCM hierarchical to frfr_category (n_restarts=5, seed=42)
+NLL at init = 11616.2147
+restart 0: nll0=11616.2147  nll*=10502.1620  converged=True  iters=44  elapsed=6.3s
+restart 1: nll0=14427.3698  nll*=10502.1620  converged=True  iters=47  elapsed=7.0s
+restart 2: nll0=11219.2080  nll*=10502.1620  converged=True  iters=41  elapsed=5.7s
+restart 3: nll0=11354.0742  nll*=10502.1620  converged=True  iters=42  elapsed=6.1s
+restart 4: nll0=15386.1436  nll*=10502.1620  converged=True  iters=41  elapsed=6.2s
+best: nll=10502.1620  ll=-10502.1620  restart=0  total fit time=31.5s
+
+MLE parameters:
+  beta_enc = 0.7243
+  beta_story = 0.0000
+  gamma_fc = 0.5150
+  k = 3.5753
+  beta_rec = 0.8633
+  epsilon_d = 1.6199
+  beta_rein = 0.3000
+  lambda_reinstate = 0.5000
+  tau_init = 0.4075
+(beta_list = beta_story; identical numerical value, C&Z naming)

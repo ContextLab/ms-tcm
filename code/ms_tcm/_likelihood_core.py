@@ -55,47 +55,18 @@ over T via logsumexp:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
-
-# --- xp dispatch helpers -------------------------------------------------
-
-
-def _is_jax(xp: Any) -> bool:
-    return getattr(xp, "__name__", "") == "jax.numpy"
-
-
-def at_set(x, idx, value, xp):
-    if _is_jax(xp):
-        return x.at[idx].set(value)
-    x = x.copy()
-    x[idx] = value
-    return x
-
-
-def at_add(x, idx, delta, xp):
-    if _is_jax(xp):
-        return x.at[idx].add(delta)
-    x = x.copy()
-    x[idx] = x[idx] + delta
-    return x
-
-
-def log_softmax_masked(scaled, keep_mask, xp):
-    """Numerically stable log-softmax over keep_mask=True entries."""
-    NEG = -1.0e30
-    s = xp.where(keep_mask, scaled, NEG)
-    m = xp.max(s)
-    shifted = s - m
-    exp_s = xp.where(keep_mask, xp.exp(shifted), 0.0)
-    denom = xp.sum(exp_s)
-    return s - m - xp.log(xp.maximum(denom, 1e-300))
-
-
-def norm_preserving_rho(beta, dot, xp):
-    """ρ such that ||ρ c_prev + β c_in|| = 1 for unit-norm c_prev, c_in."""
-    inner = 1.0 + beta * beta * (dot * dot - 1.0)
-    return xp.sqrt(xp.maximum(inner, 0.0)) - beta * dot
+from ms_tcm._likelihood_shared import (
+    _is_jax,
+    activation,
+    at_add,
+    at_set,
+    c_IN_rec_of,
+    compute_p_stop,
+    drift_c_ret,
+    log_softmax_masked,
+    norm_preserving_rho,
+)
 
 
 # --- hyperparameter bundle -----------------------------------------------
@@ -217,42 +188,11 @@ def run_encoding(
     return c_item_traj, m_fc_exp, m_cf_exp
 
 
-# --- retrieval helpers ---------------------------------------------------
-
-
-def activation(m_cf_exp, c_ret, xp):
-    """Eq 5: a = M^CF_exp · c_ret. Shape: (W,)."""
-    return m_cf_exp @ c_ret
-
-
-def compute_p_stop(m_cf_exp, c_ret, already_mask, epsilon_d, xp):
-    """Eq 7: p_stop = exp(-ε_d · a^nr / a^r). Sums are over |a|."""
-    a = activation(m_cf_exp, c_ret, xp)
-    a_abs = xp.abs(a)
-    a_r = xp.sum(xp.where(already_mask, a_abs, 0.0))
-    a_nr = xp.sum(xp.where(already_mask, 0.0, a_abs))
-    ratio = a_nr / xp.maximum(a_r, 1e-30)
-    p_stop_raw = xp.exp(-epsilon_d * ratio)
-    return xp.where(a_r > 0.0, p_stop_raw, 0.0)
-
-
-def drift_c_ret(c_ret, c_IN_rec, beta_rec, xp):
-    """Eq 3: c^ret = ρ · c^ret + β_rec · c^IN_rec."""
-    dot = xp.sum(c_ret * c_IN_rec)
-    rho = norm_preserving_rho(beta_rec, dot, xp)
-    return rho * c_ret + beta_rec * c_IN_rec
-
-
-def c_IN_rec_of(idx, m_fc_exp, gamma_fc, d, xp, dtype):
-    """Eq 4: c^IN_rec = (1-γ_fc) M^FC_pre · f_j + γ_fc M^FC_exp · f_j.
-
-    Under identity M^FC_pre, M^FC_pre · f_j = e_{idx+1} (a basis vector).
-    The experimental branch reads the column M^FC_exp[:, idx].
-    """
-    pre = xp.zeros(d, dtype=dtype)
-    pre = at_set(pre, idx + 1, 1.0, xp)
-    exp_col = m_fc_exp[:, idx]
-    return (1.0 - gamma_fc) * pre + gamma_fc * exp_col
+# --- retrieval helpers (imported from _likelihood_shared) ----------------
+# ``activation``, ``compute_p_stop``, ``drift_c_ret``, ``c_IN_rec_of`` are
+# defined once in ``_likelihood_shared.py`` and shared with the MS-TCM
+# extension (``_likelihood_core_mstcm.py``). See that module for the
+# canonical definitions; this file just imports them at the top.
 
 
 # --- per-list log-likelihood (marginalized over phase-transition) --------
