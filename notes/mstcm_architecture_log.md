@@ -9,6 +9,20 @@ The point is to make the reasoning chain reconstructable — when a future
 session asks "why does the model have X?", the answer should be findable
 here.
 
+**Code-vs-log convention (Constitution II compliance)**:
+
+- This log records the **history of design decisions** — each iteration
+  documents what changed, why, and what was predicted.
+- The **code is monotonic**: only the *current* MS-TCM model lives in
+  `code/ms_tcm/_likelihood_core_mstcm.py`. There are NOT separate
+  `mstcm.py`, `mstcm_v2.py`, `mstcm_v3.py` files. Each iteration's
+  changes replace the prior version IN PLACE.
+- The single source of truth for "what the model is right now" is the
+  code; the log is the audit trail for "how we got here."
+- When you read this log, the LATEST iteration section corresponds to
+  the code's current state. Earlier iterations describe code that no
+  longer exists in the repo.
+
 ---
 
 ## Iteration 0 — C&Z 2025 baseline (verified)
