@@ -1014,3 +1014,100 @@ This 3 × 2 = 6-fit grid lets us answer:
 
 **Deferred to Iteration 5b**: standard CMR (Polyn 2009) implementation,
 trial-LL and curve fits, addition to fig_analyses as a third overlay.
+
+### Iteration 5b: JAX-accelerated MS-TCM simulator
+
+**Decision (2026-04-26)**: numpy curve fits are too slow (~3.3 s per loss
+evaluation; with maxiter=80 and 12 finite-diff evals per iter and 5
+restarts, that's ~4-5 hours per fit). Convert MS-TCM to a JAX simulator
+to amortize encoding overhead and exploit vmap parallelism across
+simulated lists.
+
+**Implementation** (`code/ms_tcm/_likelihood_core_mstcm.py`):
+
+- `_simulate_recalls_mstcm_jax_impl`: pure JAX simulator implemented as
+  a single `jax.lax.while_loop` over a 4-state phase machine
+  (`PHASE_ALPHA` → pure-global recall, `PHASE_BETA_SELECT` →
+  storyline-selection step, `PHASE_BETA_WITHIN` → within-storyline
+  recall, `PHASE_TERMINATED`). The loop body dispatches via
+  `jax.lax.switch(phase, [step_alpha, step_beta_select, step_beta_within,
+  identity], state)`. Each step branch updates state but conditionally
+  via `jnp.where(visit_ends, …, …)` so the trace is jit-compatible.
+- `simulate_recalls_mstcm_jax`: jitted wrapper (`@jax.jit` with
+  `static_argnames=("W", "K", "max_recalls")`). Takes the dataclass
+  `MSCoreHyperparams`, packs to a 1-D float64 array for tracing
+  (`_hp_to_array` / `_array_to_hp`), and unboxes the array of
+  hyperparameters inside the trace. Subsequent calls with the same
+  shape arguments reuse the cached compilation.
+- `simulate_recalls_mstcm_jax_batch`: vmapped across `(cat_indices_batch,
+  keys_batch)` for batched simulation across all participant×list×draw
+  combinations in one JAX call. FRFR-category is uniformly W=16, K=4
+  across all 480 lists, which lets us run N = L × n_draws = 2400
+  simulations as a single vmap.
+
+**Distributional verification** (`/tmp/verify_jax_distrib.py`):
+
+Initial run showed JAX over-recalled by ~+0.2 SPC at every position;
+mean recall length 9.18 vs numpy's 6.44. Root cause: the numpy
+simulator has a defensive guard at lines 834-835 that marks a storyline
+fully exhausted if a visit produces zero recalls (immediate p_stop on
+the first iteration). The JAX simulator was missing this guard, so a
+cycle of "select storyline → immediate p_stop → re-select same
+storyline" could exhaust the recall cap without firing the
+no-candidates termination.
+
+**Fix**: track `visit_start_step` in the JAX state. When `visit_ends`
+fires AND `step == visit_start_step`, mark `s_hat` fully exhausted via
+`fully_exhausted.at[s_hat].set(True)`. After this fix, max |SPC diff|
+between JAX and numpy on N=5000 simulations dropped from 0.234 to 0.020
+(within MC noise; 71/71 oracle LL tests still pass).
+
+**Performance** (FRFR-category, n_draws=5):
+
+| Path | Loss eval | Notes |
+|-|-|-|
+| numpy | 3.30 s | per-list simulator + DataFrame assembly + canonical curve analysis |
+| JAX-batched (Dataset roundtrip) | 1.60 s | single vmap, but materializes ~12k-row DataFrame |
+| JAX-batched (tensor-direct) | 0.30 s | single vmap + direct curve computation from `(N, R)` recall tensor |
+
+The tensor-direct path skips `simulate_dataset_mstcm_jax_batched` →
+`compute_curves` and computes SPC, pFR, lag-CRP directly from the
+`(out, mask)` JAX outputs via `curves_from_recall_tensor`. Bit-exact
+match against the canonical analysis (0.000000 max diff on all three
+curves over the same RNG; verified at `/tmp/verify_curves_direct.py`).
+
+**Net speedup: 11×**, reducing the expected 4-5h fit to ~30 min.
+
+**C&Z is NOT a reduction of MS-TCM**: tested setting K=1, τ=0, λ=0,
+w_global=0 in MS-TCM; resulting SPC differs sharply from C&Z (CMR-style
+recency-only vs C&Z's primacy-dominated curve). C&Z's two-phase
+retrieval (phase 1 cued by c_item_end, phase 2 by e_start) doesn't
+correspond to MS-TCM's route α + β. C&Z fits therefore stay on the
+numpy path; only MS-TCM uses JAX.
+
+### Iteration 5c: Polyn 2009 standard CMR baseline
+
+**Implementation** (`code/ms_tcm/_likelihood_core_cmr.py`, NEW):
+
+- `CMRCoreHyperparams`: 7 free parameters (β_enc, β_rec, γ_fc, k, ε_d,
+  φ_s, φ_d).
+- `run_encoding_cmr`: single c_item drift (no list-level c_list).
+- `primacy_gradient(W, φ_s, φ_d)`: φ_l = φ_s · exp(-φ_d · (l-1)) + 1
+  (Polyn 2009 Eq 5).
+- `simulate_recalls_cmr`: single-phase retrieval starting from c_item_end;
+  activations scaled by primacy gradient via `m_cf_eff = m_cf_exp * φ[:, None]`.
+
+No closed-form LL — the curve-matching fitter's only requirement is a
+simulator. The fitter's `--model=cmr` branch supplies CMR's 7-d θ:
+(β_enc, β_rec, γ_fc, log_k, log_ε_d, log_φ_s, log_φ_d).
+
+**Sanity check** (φ_s=2.5, φ_d=0.97, ε_d=2.0): produces the canonical
+bowed SPC (sp 1-3 ≈ 0.38, sp 14-16 ≈ 0.58-0.82) with recency-dominated
+pFR. Behavior matches Polyn 2009 Fig 3.
+
+**Status**: all three curve fits launched in background:
+- mstcm (JAX-batched): restart 0 finished, RMSE 0.208 → 0.068 in 15 iters
+- cz (numpy): in progress, output buffered until first restart line
+- cmr (numpy): in progress, output buffered until first restart line
+
+Final numbers + fig_analyses regeneration to follow.
