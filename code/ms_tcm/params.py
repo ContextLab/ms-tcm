@@ -43,6 +43,27 @@ class ModelParameters:
     """Item-level context drift rate at encoding.
 
     Source: Cornell & Zhang 2025 Table 1 (β_enc = 0.679). v6 §2.1 Eq 1.
+
+    In MS-TCM v2 this governs the PER-STORYLINE item-level context drift
+    (each storyline's c^item_s drifts at this rate when items from that
+    storyline are encoded). The companion ``beta_enc_global`` parameter
+    controls the global cross-storyline context drift.
+    """
+
+    beta_enc_global: float = 0.400
+    """Global (cross-storyline) item-level context drift rate at encoding.
+
+    NEW in MS-TCM Iteration 2. Governs c^global drift, which advances on
+    EVERY encoding step regardless of storyline (continuous time across
+    the whole list). The global level treats storylines as "items" and is
+    used at retrieval to select which storyline to recall from.
+
+    Defaults to 0.400 (the C&Z β_list rate) reflecting that the global
+    cross-storyline context evolves more slowly than within-storyline
+    item context. Constraint at fit time: β_enc^G ∈ (0, 1); we don't
+    require β_enc^G < β_enc since they govern different scales.
+
+    In Iteration 1 MS-TCM (and C&Z baseline), this parameter is unused.
     """
 
     beta_story: float = 0.400
@@ -178,6 +199,11 @@ class ModelParameters:
         if not (0.0 < self.beta_enc < 1.0):
             raise ValueError(
                 f"beta_enc must be in (0, 1); got {self.beta_enc!r}"
+            )
+        if not (0.0 < self.beta_enc_global < 1.0):
+            raise ValueError(
+                f"beta_enc_global must be in (0, 1); got "
+                f"{self.beta_enc_global!r}"
             )
         if not (0.0 < self.beta_story < 1.0):
             raise ValueError(

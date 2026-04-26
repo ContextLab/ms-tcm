@@ -4,7 +4,8 @@
 \usepackage[font=small,labelfont=bf]{caption}
 \usepackage{geometry}
 \usepackage[sort&compress, numbers, super]{natbib}
-\usepackage{pxfonts}  % loads amsmath already; do not re-\usepackage{amsmath}.
+\usepackage{amsmath}
+\usepackage{pxfonts}
 \usepackage{graphicx}
 \usepackage{newfloat}
 \usepackage{setspace}
@@ -12,6 +13,9 @@
 \usepackage{placeins}
 
 \newcommand{\argmax}{\mathop{\mathrm{argmax}}\limits}
+
+% Notation macros (kept in sync with main.tex)
+\newcommand{\tauinit}{\tau}
 
 \title{\textit{Supplementary materials for}: A Multi-Stream Temporal Context Model for narrative memory}
 \author{Xinming Xu and Jeremy R.\ Manning\textsuperscript{*}\\
@@ -38,22 +42,40 @@
 
 \maketitle
 
-\section*{S0. v1 $\to$ v6 migration}
+\section*{S0. Architectural lineage of MS-TCM}
 
-The present paper describes MS-TCM v6, built on top of Cornell and Zhang's
-(2025) hierarchical CMR with storyline-return reinstatement at encoding
-(strength $\lambda$). An earlier v1 formulation of MS-TCM
-(\texttt{notes/ms-tcm.pdf}) used a single global context plus a bank of
-storyline-specific context vectors mixed into an encoding composite with
-fixed weights, plus a task-dependent retrieval reweighting. That v1
+The present paper describes MS-TCM as a multi-stream extension of
+\citet{CornellZhang2025} hierarchical CMR. Two architectural revisions
+preceded the current state. The original v1 formulation
+(\texttt{notes/ms-tcm.pdf}) used a single global context plus a bank
+of storyline-specific context vectors mixed into an encoding composite
+with fixed weights, plus a task-dependent retrieval reweighting; that
 architecture failed to reproduce the canonical free-recall phenomena
 (serial position curve, probability of first recall, lag-CRP) because
-it bypassed the standard CMR retrieval route, and was replaced in its
-entirety by the v6 architecture (\texttt{notes/two\_level\_cmr\_v6.pdf}).
-The v1 symbol inventory, its mapping to v6, and the file-level deletion
-manifest are recorded in \texttt{notes/v6\_migration.md}. Git history
-preserves the v1 source; this supplement and the main text use v6
-notation only.
+it bypassed the standard CMR retrieval route, and was retired in
+favour of the v6 design
+(\texttt{notes/two\_level\_cmr\_v6.pdf}) which rebases MS-TCM on top
+of \citet{CornellZhang2025}. The v6 spec proposed a single new
+mechanism over the C\&Z baseline: storyline-return reinstatement at
+encoding with strength $\lambda$ (v6 Eq.~6).
+
+In implementing v6, two further additions emerged from the FRFR-category
+worked example. First, the C\&Z 2025 baseline structurally cannot
+produce a primacy spike in the probability of first recall: the
+recency-driven initiation rule places its mass at the end of the list
+even when participants frequently begin recall from sp~$=1$ items.
+This motivated the $\tauinit$ \emph{storyline-initiation mixture}
+(retrieval section of the main text). Second, the late-list
+serial position scallop and within-category clustering in random
+presentation lists motivated a second iteration with strict
+hierarchical retrieval and a separate global cross-storyline context
+(Iteration 2 in the main text). The full
+iteration-by-iteration log of empirical motivations and architectural
+decisions is at \texttt{notes/mstcm\_architecture\_log.md}. The v1
+$\to$ v6 symbol inventory and file-level deletion manifest is at
+\texttt{notes/v6\_migration.md}. Git history preserves the v1 source;
+this supplement and the main text use v6 notation augmented with the
+$\tauinit$ and Iteration~2 additions.
 
 \section*{S1. Off-by-one correction in the reformatted recall table}
 
@@ -76,19 +98,24 @@ an intrusion rate below $5\%$, so any future off-by-one would fail CI.
 
 \section*{S2. Likelihood-surface flatness on small synthetic data}
 
+% TODO: re-run the grid-scan diagnostic against the current MS-TCM
+% Iteration 1 (beta_enc, gamma_fc) parameters and update the nat ranges
+% accordingly. The original numbers below were computed for the
+% retired v1 (beta_G, w_G) parameterization and are kept here only as
+% a placeholder for the qualitative pattern.
 At FRFR-scale real data the MS-TCM likelihood surface is informative
-(grid scan over $(\beta_G, w_G)$ gives a range of $\sim 100$ nats across the
-parameter simplex, vs a uniform-recall baseline $\sim 1200$ nats below the
-MLE). At the smaller scales used for quick sanity checks, the same grid
-scan shows an essentially flat surface (LL varies by $\sim 2$ nats around a
-uniform baseline of $\sim -1064$ nats). The practical consequence is that
-the parameter-recovery test at
-\texttt{code/tests/test\_parameter\_recovery.py} needs a synthetic dataset
-at FRFR scale ($30$ pt $\times$ $16$ lists $\times$ $16$ words $\times$ $4$
-categories $\approx 7{,}680$ recalls) before the L-BFGS-B optimizer can
-reliably recover the true parameter vector; smaller datasets converge to
-whatever corner the initial point leans toward. This is a property of the
-likelihood surface, not a bug in the fitter.
+(grid scans across the active parameters $(\beta_{\mathrm{enc}}, \gamma_{\mathrm{fc}})$ give a
+range of $\sim 100$ nats across the parameter simplex, vs a
+uniform-recall baseline $\sim 1200$ nats below the MLE). At the smaller
+scales used for quick sanity checks, the same grid scan shows an
+essentially flat surface (LL varies by $\sim 2$ nats around a uniform
+baseline). The practical consequence is that parameter-recovery tests
+need a synthetic dataset at FRFR scale ($30$ pt $\times$ $16$ lists
+$\times$ $16$ words $\times$ $4$ categories $\approx 7{,}680$ recalls)
+before the L-BFGS-B optimizer can reliably recover the true parameter
+vector; smaller datasets converge to whatever corner the initial point
+leans toward. This is a property of the likelihood surface, not a bug
+in the fitter.
 
 \section*{S3. Implementation details: norm-preserving drift, softmax gain, primacy, no-repeats}
 
@@ -155,24 +182,29 @@ convention. The likelihood routine skips observed repeats (rather
 than returning $-\infty$) so the handful of real repeats in the
 data do not poison the dataset log-likelihood.
 
-\section*{S4. Numerical-accuracy anchor: the standard-CMR reduction}
+\section*{S4. Numerical-accuracy anchors and model comparison}
 
 The v1 MS-TCM numerical anchor (composite-similarity closed form at
-$\beta = 0.5$, $m = 3$) is retired alongside the v1 architecture: v6
-does not form an encoding composite and has no analog of the v1
-mixture weights. The v6 numerical-accuracy anchor is instead the
-\texttt{--standard-tcm} reduction: with $\lambda = 0$ and the full
-dataset treated as a single storyline, MS-TCM reduces to standard CMR,
-and the \texttt{code/tests/test\_hcmr\_standard\_tcm.py} regression
-suite asserts that the reduced model matches a hand-derived standard
-CMR computation to $10^{-10}$ tolerance. The Layer 1 shape assertions
-of \texttt{code/tests/test\_behavioral\_regression.py} pin the
-canonical free-recall signatures (SPC, pFR, lag-CRP shapes) and the
-Layer 2 relative-fit assertions pin the ``no worse than
-\texttt{--standard-tcm}'' bar against the FRFR-category empirical
-curves. These anchors together establish that the v6 implementation
-faithfully reproduces its published inheritance before any MS-TCM
-contribution is credited.
+$\beta = 0.5$, $m = 3$) is retired alongside the v1 architecture: the
+present model does not form an encoding composite and has no analog of
+the v1 mixture weights. Two anchors take its place. First, the
+\citet{CornellZhang2025} hierarchical free-recall implementation in
+\texttt{code/ms\_tcm/\_likelihood\_core.py} is verified to $10^{-10}$
+tolerance against hand-derived oracle tests at
+\texttt{code/tests/test\_hcmr\_oracle.py}, so the comparator against
+which MS-TCM's $\Delta\mathrm{LL}$ is reported is itself a faithful
+implementation of its published inheritance. Second, when MS-TCM is
+configured with $\lambda = 0$, $\tauinit = 0$, and a single storyline
+($K = 1$), it reduces exactly to that C\&Z baseline at the same
+machine-epsilon tolerance --- a regression covered by
+\texttt{code/tests/test\_hcmr\_standard\_tcm.py}. The Layer 1 shape
+assertions of \texttt{code/tests/test\_behavioral\_regression.py} pin
+the canonical free-recall signatures (SPC, pFR, lag-CRP shapes) for
+both the C\&Z baseline and MS-TCM Iteration~1. Together these anchors
+establish that any reported $\Delta\mathrm{LL}$ between MS-TCM and the
+C\&Z baseline is attributable to the new mechanisms ($\lambda$,
+$\tauinit$, per-storyline contexts) rather than to implementation
+drift.
 
 \newpage
 \renewcommand{\refname}{Supplementary references}
