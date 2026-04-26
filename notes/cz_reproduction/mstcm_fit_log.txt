@@ -1,19 +1,19 @@
 # Fit MS-TCM MS-TCM to frfr_category (n_restarts=3, seed=42)
-NLL at init = 12952.6355
-restart 0: nll0=12952.6355  nll*=10608.8470  converged=True  iters=31  elapsed=220.4s
-restart 1: nll0=15399.4379  nll*=10608.8469  converged=True  iters=33  elapsed=239.0s
-restart 2: nll0=13406.6697  nll*=10608.8529  converged=True  iters=25  elapsed=189.0s
-best: nll=10608.8469  ll=-10608.8469  restart=1  total fit time=650.0s
+NLL at init = 12988.6193
+restart 0: nll0=12988.6193  nll*=10557.6146  converged=True  iters=32  elapsed=230.8s
+restart 1: nll0=14973.9820  nll*=10557.6144  converged=True  iters=33  elapsed=254.6s
+restart 2: nll0=13032.0184  nll*=10557.6146  converged=True  iters=34  elapsed=249.0s
+best: nll=10557.6144  ll=-10557.6144  restart=1  total fit time=736.1s
 
 MLE parameters:
-  beta_enc = 0.5870
-  beta_enc_global = 0.7908
-  beta_story = 0.1596
-  gamma_fc = 0.6534
-  k = 3.3356
-  beta_rec = 0.8883
-  epsilon_d = 2.5834
+  beta_enc = 0.9841
+  beta_enc_global = 0.7813
+  beta_story = 0.2891
+  gamma_fc = 0.7304
+  k = 3.1197
+  beta_rec = 0.9277
+  epsilon_d = 2.8886
   beta_rein = 0.3108
   lambda_reinstate = 0.4684
-  tau_init = 0.5072
-  w_global = 0.5108
+  tau_init = 0.5874
+  w_global = 0.2798

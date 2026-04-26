@@ -227,8 +227,8 @@ def _oracle_mstcm_ll(p, W, K, cat_indices, recall_sps, recall_mask):
             log_p_story = _log_softmax_masked(k * story_acts, cand_mask)
             cum_beta += float(log_p_story[s_hat])
 
-            # Within-storyline recall: c_ret_s = e_start (option ii).
-            c_ret_s = _onehot(d, 0)
+            # Within-storyline recall: c_ret_s = M^lists_G[ŝ] (option iii).
+            c_ret_s = m_sc[s_hat].copy()
             in_story = np.array(
                 [int(cat_indices[sp_idx]) == s_hat for sp_idx in range(W)],
                 dtype=bool,
@@ -345,29 +345,29 @@ def test_mstcm_matches_oracle(seed, K, tau, lam, wg):
     )
 
 
-def test_mstcm_storyline_routes_put_mass_at_storyline_starts():
-    """With τ>0, simulated pFR puts mass at storyline-start positions
-    (1, 5, 9, 13 in a blocked K=4 list).
+def test_mstcm_storyline_route_diversifies_pFR():
+    """With τ>0 (under option iii), simulated pFR is more DIVERSE than
+    under τ=0 (pure-recency global retrieval).
 
-    Note: under option (ii) c_ret_s = e_start, the dominant storyline
-    selected via M^SC · c_global_end will be the MOST-RECENTLY-ENCODED
-    storyline (because its M^SC entry overlaps most with c_global_end).
-    Within that storyline, c_ret_s = e_start produces within-storyline
-    primacy → pFR favors the FIRST item of the most-recent storyline.
+    Mechanism: route α (τ=0) cues retrieval with c^global_end, which is
+    most strongly aligned with the LAST few items encoded (sp 13-16 for
+    a blocked K=4 W=16 list) — so pFR concentrates heavily on those
+    positions. Route β under option (iii) cues with M^lists_G[ŝ] —
+    the storyline's accumulated context, which is less recency-
+    concentrated than c^global_end. The selected storyline is still
+    biased toward the most-recent one, but within-storyline retrieval
+    distributes more evenly across that storyline's items.
 
-    For a blocked W=16 K=4 list, that's pFR(sp=13). pFR(sp=1) requires
-    storyline 0 to be selected over storylines 1, 2, 3 — possible but
-    less common.
-
-    Test: at τ=0.7 the SUM of pFR mass at storyline-start positions
-    {1, 5, 9, 13} should be substantially higher than at τ=0.
+    Net effect: τ>0 reduces the pure-recency concentration of pFR.
     """
     W = 16
     K = 4
     cat_indices = _blocked_cat_indices(W, K)
-    storyline_starts = {1, 5, 9, 13}
     p_no_tau = _default_params(lambda_reinstate=0.0, tau_init=0.0)
     p_with_tau = _default_params(lambda_reinstate=0.5, tau_init=0.7)
+
+    last_two_positions = {15, 16}
+    last_four_positions = {13, 14, 15, 16}
 
     first_recalls_tau0 = []
     first_recalls_tau07 = []
@@ -385,22 +385,30 @@ def test_mstcm_storyline_routes_put_mass_at_storyline_starts():
         if rec_b:
             first_recalls_tau07.append(rec_b[0])
 
-    frac_starts_tau0 = sum(
-        1 for s in first_recalls_tau0 if s in storyline_starts
+    # Concentration on the last 2 positions (the strongest recency tail
+    # under route α). τ>0 should reduce this — within-storyline cue
+    # is less recency-peaked than c^global_end.
+    frac_last2_tau0 = sum(
+        1 for s in first_recalls_tau0 if s in last_two_positions
     ) / max(1, len(first_recalls_tau0))
-    frac_starts_tau07 = sum(
-        1 for s in first_recalls_tau07 if s in storyline_starts
+    frac_last2_tau07 = sum(
+        1 for s in first_recalls_tau07 if s in last_two_positions
     ) / max(1, len(first_recalls_tau07))
 
-    # τ=0.7 should put MORE mass at storyline starts than τ=0.
-    assert frac_starts_tau07 > frac_starts_tau0, (
-        f"τ=0.7 should put more pFR mass at storyline starts than τ=0; "
-        f"got τ=0: {frac_starts_tau0:.3f}, τ=0.7: {frac_starts_tau07:.3f}"
+    assert frac_last2_tau07 < frac_last2_tau0, (
+        f"τ=0.7 should reduce the recency-tail concentration of pFR "
+        f"(route β under option iii has a less-recency-peaked cue than "
+        f"route α). Got τ=0: {frac_last2_tau0:.3f} on positions "
+        f"{{15,16}}, τ=0.7: {frac_last2_tau07:.3f}."
     )
-    # And the τ=0.7 mass at storyline starts should be substantial
-    # (≥20% — consistent with at least one storyline-init firing per
-    # simulated trial putting mass at one of the 4 starts).
-    assert frac_starts_tau07 > 0.20, (
-        f"τ=0.7 should give substantial pFR mass at storyline starts; "
-        f"got {frac_starts_tau07:.3f}"
+
+    # Both should still keep the bulk of mass in the last storyline
+    # (positions 13-16) — the storyline-selection mechanism still
+    # picks the most-recent storyline most often.
+    frac_last4_tau07 = sum(
+        1 for s in first_recalls_tau07 if s in last_four_positions
+    ) / max(1, len(first_recalls_tau07))
+    assert frac_last4_tau07 > 0.40, (
+        f"Even at τ=0.7, the last storyline (positions 13-16) should "
+        f"still receive substantial pFR mass; got {frac_last4_tau07:.3f}"
     )

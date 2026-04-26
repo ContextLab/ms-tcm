@@ -839,14 +839,101 @@ most-recent storyline (whose c^story end-state overlaps c^global
 end-state). The model captures the LAST storyline's first item
 (pFR=13) but not the FIRST storyline's first item (pFR=1).
 
-**Suggested Iteration 4 directions** (deferred):
-1. Test option (iii) for OQ3: c_ret_s = M^lists_G[ŝ] (cached storyline-
-   list context) instead of e_start. Different within-storyline
-   recency-vs-primacy bias.
-2. Add a "primacy bias" to storyline selection — softmax over
-   (M^lists_G · c_ret_g) PLUS a positive scalar at the FIRST-encoded
-   storyline (analogous to CMR primacy gradient applied at the
-   storyline level).
-3. Investigate whether the FRFR-category data have a task-driven
-   start-from-beginning instruction effect (cf. earlier behavioral
-   investigation).
+**Critical issues that v3 still doesn't capture**:
+1. **pFR primacy spike at sp = 1**: observed ~0.27 in BOTH halves, but
+   model gives ~0.05. The model captures the LAST storyline's first
+   item (pFR=13 bump) via the storyline-init mechanism + within-
+   storyline primacy, but does NOT capture the FIRST storyline's first
+   item dominance.
+2. **SPC scallops**: missing for both early and late lists in the
+   model output, despite the storyline-hierarchy mechanism. The
+   model produces a smoother bowl than the observed scalloped curve.
+3. lag-CRPs (both halves) are well-captured.
+
+**Iteration 4 direction (committed)**: Test OQ3 option (iii) —
+`c_ret_s = M^lists_G[ŝ]` (cached storyline-list context) instead of
+`e_start`. This changes the within-storyline retrieval cue from a
+universal e_start marker to the storyline's own end-of-encoding
+context. May change scallop expression and pFR distribution.
+
+**Rejected directions** (Jeremy 2026-04-26):
+- Adding a CMR-style primacy gradient to storyline selection: rejected
+  because a major theoretical advance of C&Z 2025 was eliminating
+  CMR's primacy gradient; reintroducing it would revert that advance.
+- Investigating start-from-beginning task instructions: rejected
+  because the experimenter (Jeremy) is certain no such instructions
+  were used in FRFR-category data collection.
+
+### Iteration 4 fit results (2026-04-26): OQ3 option (iii)
+
+Switched the within-storyline retrieval cue from option (ii)
+`c_ret_s = e_start` to option (iii) `c_ret_s = M^lists_G[ŝ]` (cached
+storyline-list context). Same parameter count as v3 (11 params) — this
+is a structural change, not a new free parameter.
+
+| Iteration | LL (FRFR) | Δ vs C&Z | n_params | ΔAIC vs C&Z |
+|-|-|-|-|-|
+| C&Z baseline | −10699.82 | — | 7 | — |
+| MS-TCM v2 (strict, opt ii) | −10773.54 | −74 | 10 | +180 |
+| MS-TCM v3 (soft, opt ii) | −10608.85 | +91 | 11 | −174 |
+| **MS-TCM v4 (soft, opt iii)** | **−10557.61** | **+142** | **11** | **−276** |
+
+3 restarts converge to LL = −10557.61 (machine-precision agreement
+across restarts; this is the global MLE under option iii).
+
+**Fitted MLE** (consolidated MS-TCM v4 on FRFR-category):
+```
+beta_enc = 0.984         (per-storyline drift saturated at ~1)
+beta_enc_global = 0.781  (global drift, similar to v3)
+beta_list = 0.289        (storyline drift, higher than v3's 0.160)
+gamma_fc = 0.730         (more weight on experimental context)
+k = 3.120
+beta_rec = 0.928
+epsilon_d = 2.889        (stopping rule fires earlier than v3)
+beta_rein = 0.311        (gradient-zero, fixed at init)
+lambda_reinstate = 0.468 (gradient-zero, fixed at init)
+tau_init = 0.587         (route β fires more often than v3)
+w_global = 0.280         (mixing favors per-storyline matrix more)
+```
+
+**Key behavioral findings** (figure: paper/figs/source/fig_analyses):
+- ✓ **SPC scallops captured** in BOTH halves: MS-TCM blue line shows
+  visible peaks/troughs at category-boundary positions (1, 5, 9, 13)
+  matching the observed scalloped shape that v3's smoother bowl missed.
+- ✓ **pFR shape improved**: blue band in pFR panels now shows visible
+  bumps at sp=5, 9, 13 (storyline starts in early lists). The pFR(sp=1)
+  primacy spike is still under-predicted (model ~0.05 vs observed
+  ~0.27) but slightly improved over v3.
+- ✓ **lag-CRP** continues to track observed in both halves.
+
+**Mechanistic interpretation**: under option (iii) the within-storyline
+retrieval cue is the storyline's own accumulated context (a
+recency-weighted summary of items in that storyline). When route β
+selects storyline ŝ and applies this cue:
+- Activations distribute across all items in ŝ proportional to their
+  c^item · c^story_ŝ_end overlap.
+- Items at the storyline's BOUNDARY (start AND end) have more
+  distinctive c^item — they're closer to the storyline's net drift
+  trajectory peaks. This produces the scalloped SPC structure: each
+  storyline-visit contributes a within-storyline mini-SPC that has
+  both primacy AND recency.
+
+**Why option (iii) outperforms option (ii)**: option (ii)'s e_start cue
+was a universal marker — within-storyline activation was driven purely
+by the slot-0 component of c^item, which gave overly-strong primacy
+within each storyline visit but was decoupled from any of the
+storyline's own learned content. Option (iii)'s storyline-specific cue
+distributes activation more naturally across storyline items, giving
+both mini-primacy AND mini-recency, which matches the observed
+scallops where each category boundary produces enhanced recall of
+both the first and last items.
+
+**The remaining puzzle (still unsolved)**: pFR(sp=1) primacy spike of
+~0.27 in BOTH halves. The model gets the secondary recency-storyline
+peak (sp=13-16) and produces some mass at sp=1, but the magnitude is
+still wrong. The storyline-selection mechanism (softmax over M^SC ·
+c_global_end) systematically prefers the most-recent storyline because
+its M^SC entry was set most recently. To put dominant mass at the
+FIRST-encoded storyline would require a mechanism we haven't
+identified yet that doesn't violate the no-primacy-gradient principle.
+This is captured for future iterations.

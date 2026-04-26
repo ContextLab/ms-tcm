@@ -570,10 +570,15 @@ def _ll_route_beta_numpy(
         cum_ll += float(log_p_story[s_hat])
 
         # --- Within-storyline recall LL ---
-        # Cue: c_ret_s = e_start (option ii from OQ3).
-        e_start = xp.zeros(d, dtype=dtype)
-        e_start = at_set(e_start, 0, 1.0, xp)
-        c_ret_s = e_start
+        # Cue: c_ret_s = M^lists_G[ŝ] (option iii from OQ3 — cached
+        # storyline-list context at end of encoding for storyline ŝ).
+        # This is the storyline's own end-state context vector,
+        # populated during encoding into m_sc[ŝ]. Replaces option (ii)
+        # `e_start` which produced overly-strong within-storyline
+        # primacy. With option (iii) the within-storyline activation
+        # distribution reflects the storyline's accumulated context,
+        # giving recency-then-primacy à la C&Z Eq 14.
+        c_ret_s = m_sc[s_hat]
 
         # Effective matrices for within-storyline retrieval, mixing
         # per-storyline (strict) with global (relaxed) by w_global.
@@ -778,9 +783,10 @@ def simulate_recalls_mstcm(
         p_story = p_story / p_story.sum()
         s_hat = int(rng.choice(K, p=p_story))
 
-        # Within-storyline recall: c_ret_s = e_start (option ii).
-        c_ret_s = np.zeros(d, dtype=np.float64)
-        c_ret_s[0] = 1.0
+        # Within-storyline recall: c_ret_s = M^lists_G[ŝ] (option iii).
+        # This is the cached storyline-list context for storyline ŝ —
+        # see _ll_route_beta_numpy for rationale.
+        c_ret_s = m_sc[s_hat].copy()
 
         in_story_mask = in_story_masks[s_hat]
 
