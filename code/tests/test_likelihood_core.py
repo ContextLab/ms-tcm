@@ -1,23 +1,25 @@
-"""Equation-derived oracle tests for ``ms_tcm._likelihood_core``.
+"""Equation-derived oracle tests for ``ms_tcm._likelihood_core`` (C&Z 2025).
 
-This test file is the correctness anchor for Constitution II (Single
-Source of Truth). It contains two independent implementations:
+This file is the correctness anchor for Constitution II (Single Source of
+Truth). It contains an INDEPENDENT, naive numpy implementation of Cornell
+& Zhang 2025's hierarchical free-recall model — line-by-line from the
+equations in the paper, with no optimization, no shared helpers, and no
+calls into ``_likelihood_core``. The core's outputs must match this oracle
+to within machine epsilon on every test case.
 
-1. ``_oracle_list_ll(...)``  — a deliberately naive, line-by-line
-   implementation of v6 Eqs 1-9 + C&Z Eq 3, 7 that uses only Python
-   floats, numpy arrays, and explicit for-loops. No optimizations, no
-   shortcuts, no vectorization. This is the *external* ground truth.
+Equations implemented (C&Z 2025, free-recall variant):
+    Eq 1  : c^item_i = ρ c^item_{i-1} + β_enc c^IN_enc
+    Eq 2a : ΔM^FC_exp = c^item_{i-1} f_i^T
+    Eq 2b : ΔM^CF_exp = f_i c^item_{i-1}^T
+    Eq 3  : c^ret_j   = ρ c^ret_{j-1} + β_rec c^IN_rec
+    Eq 4  : c^IN_rec  = (1-γ_fc) M^FC_pre · f_j + γ_fc M^FC_exp · f_j
+    Eq 5  : a_j       = M^CF_exp · c^ret_j   (NO primacy gradient)
+    Eq 6  : p(j)      = softmax(k · a_j)     (with mask over already-recalled)
+    Eq 7  : p_stop    = exp(-ε_d · a^nr / a^r)
+    Eq 8  : c^list_i  = ρ c^list_{i-1} + β_list c^IN_enc
+    Eq 15 : reinstate c^item ← e_start (beginning-of-list) on phase-1 stop
 
-2. ``compute_list_log_likelihood_numpy`` — the shared core that both the
-   Tier-1 and Tier-2 backends delegate to.
-
-The test battery generates random tiny (W=3..8), single- and multi-
-storyline lists with small numbers of recalls, computes the LL under
-both implementations, and asserts they match within 1e-12.
-
-A divergence here means the core has a math bug that BOTH backends
-would inherit silently — this is the single most valuable test in the
-suite.
+Marginalized over phase-transition latent T ∈ {0, ..., R}.
 """
 
 from __future__ import annotations
@@ -25,15 +27,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from ms_tcm._likelihood_core import (
-    CoreHyperparams,
-    compute_list_log_likelihood_numpy,
-)
+from ms_tcm._likelihood_core import compute_list_log_likelihood_numpy
 from ms_tcm.params import ModelParameters
 
 
 # -----------------------------------------------------------------------
-# Oracle: naive, line-by-line implementation of the v6 equations.
+# Oracle: naive line-by-line implementation of C&Z 2025 equations.
 # -----------------------------------------------------------------------
 
 
@@ -48,362 +47,279 @@ def _rho(beta, dot):
     return np.sqrt(max(0.0, inner)) - beta * dot
 
 
+def _drift(c_prev, c_in, beta):
+    """C&Z Eqs 1, 3, 8: c <- ρ c_prev + β c_in."""
+    dot = float(np.dot(c_prev, c_in))
+    rho = _rho(beta, dot)
+    return rho * c_prev + beta * c_in
+
+
+def _log_softmax_masked(scaled, keep_mask):
+    """Log-softmax over keep_mask=True; masked positions get -inf."""
+    s = np.where(keep_mask, scaled, -1.0e30)
+    m = s.max()
+    shifted = s - m
+    exp_s = np.where(keep_mask, np.exp(shifted), 0.0)
+    denom = max(exp_s.sum(), 1e-300)
+    return s - m - np.log(denom)
+
+
+def _p_stop(m_cf_exp, c_ret, already_mask, eps_d):
+    """Eq 7: p_stop = exp(-ε_d · a^nr / a^r) using |a| sums."""
+    a = m_cf_exp @ c_ret
+    a_abs = np.abs(a)
+    a_r = float(np.sum(np.where(already_mask, a_abs, 0.0)))
+    a_nr = float(np.sum(np.where(already_mask, 0.0, a_abs)))
+    if a_r <= 0:
+        return 0.0
+    return float(np.exp(-eps_d * a_nr / a_r))
+
+
+def _c_IN_rec(idx, m_fc_exp, gamma_fc, d):
+    """Eq 4: c^IN_rec = (1-γ_fc) e_{idx+1} + γ_fc M^FC_exp[:, idx]."""
+    pre = _onehot(d, idx + 1)
+    return (1.0 - gamma_fc) * pre + gamma_fc * m_fc_exp[:, idx]
+
+
 def _oracle_list_ll(
     params: ModelParameters,
-    cat_indices: np.ndarray,
-    recall_sps: np.ndarray,
-    recall_mask: np.ndarray,
+    recall_sps: np.ndarray,   # 1-based; entries past R_valid may be padding
+    recall_mask: np.ndarray,  # True for valid (non-padding) slots
+    W: int,
 ) -> float:
-    """Independent oracle implementation of per-list log-likelihood.
-
-    Implements v6 §2-3 and C&Z 2025 Eqs 3, 7-9 literally, with only
-    numpy-level primitives. Does NOT call any ms_tcm.* code except
-    ``ModelParameters`` (for param access).
-    """
-    W = int(cat_indices.shape[0])
+    """Independent naive oracle for the C&Z marginalized list LL."""
     d = W + 1
-    K = int(cat_indices.max()) + 1 if W > 0 else 1
+    beta_enc = float(params.beta_enc)
+    beta_list = float(params.beta_list)
+    beta_rec = float(params.beta_rec)
+    gamma_fc = float(params.gamma_fc)
+    k = float(params.k)
+    eps_d = float(params.epsilon_d)
 
-    phi = 30.0 if params.standard_tcm else 1.5
-    psi = 0.8 if params.standard_tcm else 0.5
-
-    # --- ENCODING (v6 Eqs 1, 2, 5, 6, 7) ---------------------------------
+    # --- ENCODING (Eqs 1, 2a, 2b, 8) ---
     c_item = _onehot(d, 0)  # e_start
-    c_story = [_onehot(d, 0) for _ in range(K)]
-    m_ic = np.zeros((d, W), dtype=np.float64)
-    m_sc = np.zeros((K, d), dtype=np.float64)
-    seen = [False] * K
-    prev_cat = -1
-
-    c_item_traj = np.zeros((W + 1, d), dtype=np.float64)
-    c_item_traj[0] = c_item.copy()
-
+    c_list = _onehot(d, 0)
+    m_fc_exp = np.zeros((d, W), dtype=np.float64)
+    m_cf_exp = np.zeros((W, d), dtype=np.float64)
+    c_item_traj = [c_item.copy()]
     for t in range(W):
-        cat = int(cat_indices[t])
+        # Eq 2a, 2b: pre-drift c_item.
+        m_fc_exp[:, t] += c_item
+        m_cf_exp[t, :] += c_item
+        # c^IN_enc = e_{t+1} (identity M^FC_pre).
+        c_in = _onehot(d, t + 1)
+        c_item = _drift(c_item, c_in, beta_enc)   # Eq 1
+        c_list = _drift(c_list, c_in, beta_list)  # Eq 8
+        c_item_traj.append(c_item.copy())
 
-        # Storyline switch / return (Eqs 5, 6, 7).
-        if not params.standard_tcm:
-            if prev_cat >= 0 and cat != prev_cat:
-                # Switch: cache outgoing storyline to M^SC (Eq 5).
-                m_sc[prev_cat] = m_sc[prev_cat] + c_story[prev_cat]
-                # Return? Then blend cached context into active (Eq 6).
-                if seen[cat]:
-                    blended = (
-                        params.lambda_reinstate * m_sc[cat]
-                        + (1.0 - params.lambda_reinstate) * c_story[cat]
-                    )
-                    nn = float(np.linalg.norm(blended))
-                    if nn > 1e-12:
-                        blended = blended / nn
-                    c_story[cat] = blended
-                # Sync c^item to active storyline (Eq 7).
-                c_item = c_story[cat].copy()
+    e_start = _onehot(d, 0)
+    R_total = recall_sps.shape[0]
 
-        # Storyline drift (Eq 2) — only for the active storyline.
-        if not params.standard_tcm:
-            c_s = c_story[cat]
-            dot_s = float(c_s[t + 1])  # basis-vector c^IN = e_{t+1}
-            rho_s = _rho(params.beta_story, dot_s)
-            c_s = rho_s * c_s
-            c_s[t + 1] += params.beta_story
-            c_story[cat] = c_s
+    # --- For each phase-transition T ∈ {0..R_total}, compute LL_T. ---
+    # Track observed already_mask trajectory (independent of T). Repeats
+    # (sp already in mask) are noise — skip mask update.
+    mask_traj = [np.zeros(W, dtype=bool)]
+    cur_mask = np.zeros(W, dtype=bool)
+    for i in range(R_total):
+        if bool(recall_mask[i]):
+            sp = int(recall_sps[i])
+            idx = max(0, min(W - 1, sp - 1))
+            if not cur_mask[idx]:
+                cur_mask = cur_mask.copy()
+                cur_mask[idx] = True
+        mask_traj.append(cur_mask.copy())
 
-        # Item-level drift (Eq 1).
-        dot_i = float(c_item[t + 1])
-        rho_i = _rho(params.beta_enc, dot_i)
-        c_item = rho_i * c_item
-        c_item[t + 1] += params.beta_enc
-
-        # Primacy + M^IC update.
-        primacy = 1.0 + phi * np.exp(-psi * t)
-        m_ic[:, t] += primacy * c_item
-
-        c_item_traj[t + 1] = c_item.copy()
-        seen[cat] = True
-        prev_cat = cat
-
-    # --- RETRIEVAL + STOPPING (C&Z Eqs 3, 7; v6 Eqs 8-9) ----------------
-
-    def _softmax_masked(scaled, keep_mask):
-        """Log-softmax over keep_mask=True items only; others get -inf."""
-        NEG = -1.0e30
-        s = np.where(keep_mask, scaled, NEG)
-        m = s.max()
-        shifted = s - m
-        exp_s = np.where(keep_mask, np.exp(shifted), 0.0)
-        denom = exp_s.sum()
-        return s - m - np.log(denom)
-
-    def _p_stop(c_ret, already_mask):
-        a = m_ic.T @ c_ret
-        a_abs = np.abs(a)
-        a_r = float(np.sum(np.where(already_mask, a_abs, 0.0)))
-        a_nr = float(np.sum(np.where(already_mask, 0.0, a_abs)))
-        if a_r <= 0.0:
-            return 0.0
-        ratio = a_nr / a_r
-        return float(np.exp(-params.epsilon_d * ratio))
-
-    log_l = 0.0
-    c_ret = c_item_traj[W].copy()  # end-of-list cue
-    already = np.zeros(W, dtype=bool)
-    prev_idx = -1
-
-    for r in range(len(recall_sps)):
-        if not bool(recall_mask[r]):
-            continue
-        sp = int(recall_sps[r])
+    # --- Phase-1 forward (cued by c_item_end). ---
+    c_ret_phase1_traj = [c_item_traj[W].copy()]
+    cum_phase1 = [0.0]
+    cum = 0.0
+    c_ret = c_item_traj[W].copy()
+    for i in range(R_total):
+        valid = bool(recall_mask[i])
+        sp = int(recall_sps[i])
         idx = max(0, min(W - 1, sp - 1))
+        already = mask_traj[i]  # mask BEFORE this slot's recall
+        is_repeat = bool(already[idx])
+        countable = valid and not is_repeat
+        if countable:
+            p_stop = _p_stop(m_cf_exp, c_ret, already, eps_d)
+            log_1m = float(np.log(max(1.0 - p_stop, 1e-300)))
+            a = m_cf_exp @ c_ret
+            log_p = _log_softmax_masked(k * a, ~already)
+            cum += log_1m + float(log_p[idx])
+            c_in = _c_IN_rec(idx, m_fc_exp, gamma_fc, d)
+            c_ret = _drift(c_ret, c_in, beta_rec)
+        cum_phase1.append(cum)
+        c_ret_phase1_traj.append(c_ret.copy())
 
-        # Repeat handling matches Tier-1 likelihood.py: on an already-
-        # recalled sp, advance prev_idx (so the next drift targets this
-        # sp) but do NOT contribute stopping or score terms, and do NOT
-        # reset c_ret.
-        if already[idx]:
-            prev_idx = idx
-            continue
+    # --- For each T, run phase-2 starting at slot T from e_start. ---
+    ll_per_T = np.zeros(R_total + 1, dtype=np.float64)
+    for T in range(R_total + 1):
+        # Phase-1 cumulative LL through slot T.
+        phase1_ll = cum_phase1[T]
+        # Transition log-prob at c_ret after T phase-1 drifts, with mask
+        # = mask_traj[T].
+        c_ret_at_trans = c_ret_phase1_traj[T]
+        mask_at_trans = mask_traj[T]
+        p_stop_trans = _p_stop(m_cf_exp, c_ret_at_trans, mask_at_trans, eps_d)
+        log_trans = float(np.log(max(p_stop_trans, 1e-300)))
 
-        if prev_idx >= 0:
-            # Stopping contribution on pre-drift c_ret.
-            p_stop = _p_stop(c_ret, already)
-            if 1.0 - p_stop <= 0.0:
-                return float("-inf")
-            log_l += float(np.log(1.0 - p_stop))
-            # Drift c_ret toward e_{prev_idx+1}.
-            e_prev = _onehot(d, prev_idx + 1)
-            dot_r = float(np.dot(c_ret, e_prev))
-            rho_r = _rho(params.beta_rec, dot_r)
-            c_ret = rho_r * c_ret + params.beta_rec * e_prev
+        # Phase-2 forward from slot T. Repeats are noise (no contribution).
+        c_ret = e_start.copy()
+        mask = mask_at_trans.copy()
+        phase2_ll = 0.0
+        for i in range(T, R_total):
+            valid = bool(recall_mask[i])
+            sp = int(recall_sps[i])
+            idx = max(0, min(W - 1, sp - 1))
+            is_repeat = bool(mask[idx])
+            countable = valid and not is_repeat
+            if countable:
+                p_stop = _p_stop(m_cf_exp, c_ret, mask, eps_d)
+                log_1m = float(np.log(max(1.0 - p_stop, 1e-300)))
+                a = m_cf_exp @ c_ret
+                log_p = _log_softmax_masked(k * a, ~mask)
+                phase2_ll += log_1m + float(log_p[idx])
+                c_in = _c_IN_rec(idx, m_fc_exp, gamma_fc, d)
+                c_ret = _drift(c_ret, c_in, beta_rec)
+                mask = mask.copy()
+                mask[idx] = True
 
-        a = m_ic.T @ c_ret
-        keep_mask = ~already
-        log_p = _softmax_masked(params.k * a, keep_mask)
-        log_l += float(log_p[idx])
+        # Final stop log-prob.
+        p_stop_final = _p_stop(m_cf_exp, c_ret, mask, eps_d)
+        log_final = float(np.log(max(p_stop_final, 1e-300)))
 
-        already[idx] = True
-        c_ret = c_item_traj[sp].copy()
-        prev_idx = idx
+        ll_per_T[T] = phase1_ll + log_trans + phase2_ll + log_final
 
-    # Terminal stopping contribution.
-    if prev_idx >= 0:
-        p_stop = _p_stop(c_ret, already)
-        if p_stop > 0.0:
-            log_l += float(np.log(p_stop))
-
-    return log_l
+    # logsumexp.
+    m = ll_per_T.max()
+    return float(m + np.log(np.sum(np.exp(ll_per_T - m))))
 
 
 # -----------------------------------------------------------------------
-# Property-based parity tests: oracle vs. core.
+# Property tests: oracle vs core on random small lists.
 # -----------------------------------------------------------------------
 
 
-def _random_case(rng, W, K):
-    """Generate a random (cat_indices, recall_sps, recall_mask) tuple.
-
-    Recall lengths vary from 1 .. W-1. Recalls are drawn without repeats
-    from 1..W in a random order. Padding pads with 0s / False.
-    """
-    # Distribute storylines across W steps, ensuring each storyline gets
-    # at least one presentation (for K<=W).
-    cat_indices = np.zeros(W, dtype=np.int64)
-    slots = list(range(W))
-    rng.shuffle(slots)
-    for k in range(K):
-        cat_indices[slots[k]] = k
-    for i in range(K, W):
-        cat_indices[slots[i]] = rng.integers(0, K)
-
-    n_recalls = int(rng.integers(1, max(2, W)))
-    sps = rng.permutation(W)[:n_recalls] + 1  # 1-based
-    R = W  # pad recall arrays to length W
-    recall_sps = np.zeros(R, dtype=np.int64)
-    recall_mask = np.zeros(R, dtype=bool)
-    recall_sps[:n_recalls] = sps
-    recall_mask[:n_recalls] = True
-    return cat_indices, recall_sps, recall_mask
+def _random_recalls(rng, W, max_R=None):
+    """Generate a random valid recall sequence of length 1..max(2,W)."""
+    if max_R is None:
+        max_R = W
+    R = int(rng.integers(1, max_R + 1))
+    sps = (rng.permutation(W)[:R] + 1).tolist()
+    R_pad = max(R, 1)
+    recall_sps = np.zeros(R_pad, dtype=np.int64)
+    recall_mask = np.zeros(R_pad, dtype=bool)
+    recall_sps[:R] = sps
+    recall_mask[:R] = True
+    return recall_sps, recall_mask
 
 
-def _assert_oracle_matches_core(params, cat_indices, recall_sps, recall_mask):
-    W = int(cat_indices.shape[0])
-    K = int(cat_indices.max()) + 1 if W > 0 else 1
-    ll_oracle = _oracle_list_ll(params, cat_indices, recall_sps, recall_mask)
-    ll_core = compute_list_log_likelihood_numpy(
-        params, cat_indices, recall_sps, recall_mask, W=W, K=K,
-    )
-    if not (np.isfinite(ll_oracle) and np.isfinite(ll_core)):
-        assert np.isfinite(ll_oracle) == np.isfinite(ll_core), (
-            f"finiteness mismatch: oracle={ll_oracle}, core={ll_core}"
-        )
-        return
-    assert np.isclose(ll_oracle, ll_core, atol=1e-10, rtol=0), (
-        f"core diverges from equation-derived oracle: "
-        f"oracle={ll_oracle!r}, core={ll_core!r}, "
-        f"diff={ll_oracle - ll_core!r}\n"
-        f"cat_indices={cat_indices.tolist()}, recall_sps={recall_sps.tolist()}, "
-        f"recall_mask={recall_mask.tolist()}, params={params!r}"
-    )
-
-
-@pytest.mark.parametrize("W", [3, 4, 5, 8])
-@pytest.mark.parametrize("K", [1, 2])
+@pytest.mark.parametrize("W", [3, 4, 6, 10])
 @pytest.mark.parametrize("seed", list(range(5)))
-def test_core_matches_oracle_ms_tcm(W, K, seed):
-    """MS-TCM path (standard_tcm=False, λ>0)."""
-    rng = np.random.default_rng(seed)
-    cat_indices, recall_sps, recall_mask = _random_case(rng, W, K)
+def test_core_matches_oracle_random(W, seed):
+    """Random valid recall sequences: core LL must match naive oracle to 1e-10."""
+    rng = np.random.default_rng(seed * 17 + W)
+    recall_sps, recall_mask = _random_recalls(rng, W)
     params = ModelParameters(
-        beta_enc=0.68, beta_story=0.40, gamma_fc=0.3, k=6.5,
-        lambda_reinstate=0.80, beta_rec=0.33, epsilon_d=1.04,
-        paradigm="free_recall", standard_tcm=False, seed=seed,
+        beta_enc=0.679, beta_story=0.400, gamma_fc=0.315, k=6.50,
+        beta_rec=0.326, epsilon_d=1.04, beta_rein=0.300,
+        lambda_reinstate=0.0, paradigm="free_recall",
     )
-    _assert_oracle_matches_core(params, cat_indices, recall_sps, recall_mask)
+    ll_oracle = _oracle_list_ll(params, recall_sps, recall_mask, W=W)
+    ll_core = compute_list_log_likelihood_numpy(
+        params, recall_sps, recall_mask, W=W,
+    )
+    assert np.isclose(ll_oracle, ll_core, atol=1e-10, rtol=0), (
+        f"core diverges from oracle: oracle={ll_oracle!r}, core={ll_core!r}, "
+        f"diff={ll_oracle - ll_core!r}\n"
+        f"  W={W}, seed={seed}, recall_sps={recall_sps.tolist()}, "
+        f"mask={recall_mask.tolist()}"
+    )
 
 
-@pytest.mark.parametrize("W", [3, 4, 8])
-@pytest.mark.parametrize("seed", list(range(3)))
-def test_core_matches_oracle_standard_tcm(W, seed):
-    """--standard-tcm reduction (λ=0, single storyline, different primacy)."""
+@pytest.mark.parametrize("seed", list(range(5)))
+def test_core_matches_oracle_with_padding(seed):
+    """Padded recall arrays (some valid, some padding) must match oracle."""
     rng = np.random.default_rng(seed)
-    cat_indices, recall_sps, recall_mask = _random_case(rng, W, 1)
-    params = ModelParameters.standard_tcm_reduction(
-        beta_enc=0.72, beta_story=0.35, gamma_fc=0.30, k=7.0,
-        beta_rec=0.30, epsilon_d=1.0, paradigm="free_recall", seed=seed,
+    W = 8
+    R_valid = 4
+    R_pad = 12  # over-pad
+    sps = (rng.permutation(W)[:R_valid] + 1).tolist()
+    recall_sps = np.zeros(R_pad, dtype=np.int64)
+    recall_mask = np.zeros(R_pad, dtype=bool)
+    recall_sps[:R_valid] = sps
+    recall_mask[:R_valid] = True
+    params = ModelParameters(
+        beta_enc=0.679, beta_story=0.400, gamma_fc=0.315, k=6.50,
+        beta_rec=0.326, epsilon_d=1.04, beta_rein=0.300,
+        lambda_reinstate=0.0, paradigm="free_recall",
     )
-    _assert_oracle_matches_core(params, cat_indices, recall_sps, recall_mask)
+    ll_oracle = _oracle_list_ll(params, recall_sps, recall_mask, W=W)
+    ll_core = compute_list_log_likelihood_numpy(
+        params, recall_sps, recall_mask, W=W,
+    )
+    assert np.isclose(ll_oracle, ll_core, atol=1e-10, rtol=0), (
+        f"oracle={ll_oracle!r}, core={ll_core!r}, diff={ll_oracle - ll_core!r}"
+    )
 
 
 def test_core_matches_oracle_single_recall():
-    """Edge case: exactly one recall on the list.
-
-    No stopping-continuation contribution (no prior), one softmax score,
-    one terminal stopping contribution.
-    """
+    """One valid recall + 0 padding (no transition possibilities except T=0,1)."""
     params = ModelParameters(
-        beta_enc=0.68, beta_story=0.40, gamma_fc=0.3, k=6.5,
-        lambda_reinstate=0.80, beta_rec=0.33, epsilon_d=1.04,
-    )
-    W = 4
-    cat_indices = np.array([0, 0, 1, 1], dtype=np.int64)
-    recall_sps = np.zeros(W, dtype=np.int64)
-    recall_mask = np.zeros(W, dtype=bool)
-    recall_sps[0] = 3
-    recall_mask[0] = True
-    _assert_oracle_matches_core(params, cat_indices, recall_sps, recall_mask)
-
-
-def test_core_matches_oracle_all_positions_recalled():
-    """Edge case: recall every item in the list (a^nr → 0 at termination)."""
-    params = ModelParameters(
-        beta_enc=0.68, beta_story=0.40, gamma_fc=0.3, k=6.5,
-        lambda_reinstate=0.80, beta_rec=0.33, epsilon_d=1.04,
+        beta_enc=0.679, beta_story=0.400, gamma_fc=0.315, k=6.50,
+        beta_rec=0.326, epsilon_d=1.04, beta_rein=0.300,
+        lambda_reinstate=0.0, paradigm="free_recall",
     )
     W = 5
-    cat_indices = np.array([0, 1, 0, 1, 0], dtype=np.int64)
-    recall_sps = np.array([5, 4, 3, 2, 1], dtype=np.int64)
-    recall_mask = np.ones(W, dtype=bool)
-    _assert_oracle_matches_core(params, cat_indices, recall_sps, recall_mask)
+    recall_sps = np.array([3], dtype=np.int64)
+    recall_mask = np.array([True], dtype=bool)
+    ll_oracle = _oracle_list_ll(params, recall_sps, recall_mask, W=W)
+    ll_core = compute_list_log_likelihood_numpy(
+        params, recall_sps, recall_mask, W=W,
+    )
+    assert np.isclose(ll_oracle, ll_core, atol=1e-10, rtol=0)
 
 
-def test_core_matches_oracle_with_storyline_return():
-    """Exercise v6 Eqs 5+6+7: a storyline that switches out and returns."""
+def test_core_matches_oracle_all_W_recalled():
+    """Recall every position; tests termination edge cases."""
     params = ModelParameters(
-        beta_enc=0.68, beta_story=0.40, gamma_fc=0.3, k=6.5,
-        lambda_reinstate=0.80, beta_rec=0.33, epsilon_d=1.04,
+        beta_enc=0.679, beta_story=0.400, gamma_fc=0.315, k=6.50,
+        beta_rec=0.326, epsilon_d=1.04, beta_rein=0.300,
+        lambda_reinstate=0.0, paradigm="free_recall",
     )
+    W = 5
+    recall_sps = np.array([5, 4, 3, 2, 1], dtype=np.int64)
+    recall_mask = np.array([True, True, True, True, True])
+    ll_oracle = _oracle_list_ll(params, recall_sps, recall_mask, W=W)
+    ll_core = compute_list_log_likelihood_numpy(
+        params, recall_sps, recall_mask, W=W,
+    )
+    assert np.isclose(ll_oracle, ll_core, atol=1e-10, rtol=0)
+
+
+@pytest.mark.parametrize("beta_enc,beta_list,k,beta_rec,eps_d,gamma_fc", [
+    (0.3, 0.2, 2.0, 0.2, 0.5, 0.1),
+    (0.9, 0.5, 15.0, 0.7, 3.0, 0.9),
+    (0.5, 0.2, 6.5, 0.3, 1.5, 0.5),
+])
+def test_core_matches_oracle_param_sweep(
+    beta_enc, beta_list, k, beta_rec, eps_d, gamma_fc,
+):
+    """Vary parameters across plausible ranges; oracle and core agree."""
+    params = ModelParameters(
+        beta_enc=beta_enc, beta_story=beta_list, gamma_fc=gamma_fc, k=k,
+        beta_rec=beta_rec, epsilon_d=eps_d, beta_rein=0.300,
+        lambda_reinstate=0.0, paradigm="free_recall",
+    )
+    rng = np.random.default_rng(7)
     W = 6
-    # Sequence: A A B B A A — storyline A goes A→B (switch) then B→A (return).
-    cat_indices = np.array([0, 0, 1, 1, 0, 0], dtype=np.int64)
-    recall_sps = np.array([5, 3, 1, 0, 0, 0], dtype=np.int64)
-    recall_mask = np.array([True, True, True, False, False, False], dtype=bool)
-    _assert_oracle_matches_core(params, cat_indices, recall_sps, recall_mask)
-
-
-# -----------------------------------------------------------------------
-# Hand-derived closed-form check: smallest-possible list.
-# -----------------------------------------------------------------------
-
-
-def test_core_hand_derived_W2_first_recall_only():
-    """Closed-form check on W=2, one storyline, recall sp=1 then stop.
-
-    Under identity M^FC_pre and standard_tcm=True, the encoding and
-    retrieval math simplifies enough that we can derive the LL from the
-    v6 equations by hand and compare.
-
-    Parameters chosen so numbers are clean:
-        β_enc = 0.5, k = 2.0, ε_d = 1.0, β_rec = 0.3
-    Primacy: φ=30, ψ=0.8 under standard_tcm.
-
-    Encoding:
-        c_item_0 = e_0 = (1, 0, 0).
-        Step t=0: c_in = e_1. dot = 0. ρ = √(1 - 0.25) = √0.75.
-            c_item_1 = (√0.75, 0.5, 0).
-        Step t=1: c_in = e_2. dot = 0. ρ = √0.75.
-            c_item_2 = √0.75 · (√0.75, 0.5, 0) + 0.5 · (0, 0, 1)
-                     = (0.75, √0.75/2, 0.5) = (0.75, √0.1875, 0.5).
-        Primacy[0] = 31; primacy[1] = 1 + 30 · exp(-0.8).
-        M^IC[:, 0] = 31 · c_item_1   = (31·√0.75, 15.5, 0).
-        M^IC[:, 1] = primacy[1] · c_item_2.
-
-    Retrieval:
-        c_cue = c_item_2.
-        a[0] = M^IC[:, 0] · c_cue = 31 · (c_item_1 · c_item_2)
-             = 31 · (√0.75 · 0.75 + 0.5 · √0.1875 + 0 · 0.5).
-        a[1] = primacy[1] · ||c_item_2||² = primacy[1] · 1 = primacy[1].
-
-        c_item_1 · c_item_2 = √0.75 · 0.75 + 0.5 · (√0.75 / 2)
-                            = (3/4) · √0.75 + (√0.75 / 4)
-                            = √0.75.  [collect: (3/4 + 1/4) · √0.75]
-        So a[0] = 31 · √0.75; a[1] = primacy[1] · 1.
-
-    log P(sp=1 first) = log_softmax(k·a)[0]
-                     = k·a[0] - logsumexp(k·a[0], k·a[1]).
-
-    After scoring: c_ret reset to c_item_1 = (√0.75, 0.5, 0).
-    Terminal stop: a = M^IC^T @ c_ret.
-        a_stop[0] = 31 · (c_item_1 · c_item_1) = 31.
-        a_stop[1] = primacy[1] · (c_item_2 · c_item_1) = primacy[1] · √0.75.
-    already_mask = [True, False]. Abs sums:
-        a_r = |a_stop[0]| = 31.
-        a_nr = |a_stop[1]| = primacy[1] · √0.75.
-        p_stop = exp(-ε_d · a_nr / a_r).
-
-    Total LL = log P(first) + log p_stop.
-    """
-    params = ModelParameters.standard_tcm_reduction(
-        beta_enc=0.5, beta_story=0.35, gamma_fc=0.3, k=2.0,
-        beta_rec=0.3, epsilon_d=1.0, paradigm="free_recall",
+    recall_sps, recall_mask = _random_recalls(rng, W, max_R=4)
+    ll_oracle = _oracle_list_ll(params, recall_sps, recall_mask, W=W)
+    ll_core = compute_list_log_likelihood_numpy(
+        params, recall_sps, recall_mask, W=W,
     )
-    W = 2
-    cat_indices = np.array([0, 0], dtype=np.int64)
-    recall_sps = np.array([1, 0], dtype=np.int64)
-    recall_mask = np.array([True, False], dtype=bool)
-
-    # Hand-derived expected LL.
-    sqrt075 = np.sqrt(0.75)
-    primacy_0 = 31.0
-    primacy_1 = 1.0 + 30.0 * np.exp(-0.8)
-    a0 = primacy_0 * sqrt075
-    a1 = primacy_1 * 1.0
-    k = 2.0
-    ka = np.array([k * a0, k * a1])
-    m = ka.max()
-    log_p_first = ka[0] - m - np.log(np.exp(ka[0] - m) + np.exp(ka[1] - m))
-
-    a_stop_0 = primacy_0 * 1.0  # c_item_1 · c_item_1 = 1
-    a_stop_1 = primacy_1 * sqrt075
-    a_r = abs(a_stop_0)
-    a_nr = abs(a_stop_1)
-    p_stop = np.exp(-1.0 * a_nr / a_r)
-    log_p_stop = np.log(p_stop)
-
-    expected_ll = log_p_first + log_p_stop
-
-    actual_ll = compute_list_log_likelihood_numpy(
-        params, cat_indices, recall_sps, recall_mask, W=W, K=1,
-    )
-    assert np.isclose(actual_ll, expected_ll, atol=1e-12, rtol=0), (
-        f"hand-derived LL mismatch: expected {expected_ll!r}, "
-        f"got {actual_ll!r}, diff {actual_ll - expected_ll!r}"
+    assert np.isclose(ll_oracle, ll_core, atol=1e-10, rtol=0), (
+        f"params={params!r}, recall_sps={recall_sps.tolist()}: "
+        f"oracle={ll_oracle!r}, core={ll_core!r}, diff={ll_oracle - ll_core!r}"
     )

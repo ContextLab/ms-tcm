@@ -46,10 +46,23 @@ class ModelParameters:
     """
 
     beta_story: float = 0.400
-    """Storyline-level context drift rate at encoding.
+    """List-/storyline-level context drift rate at encoding.
 
-    Source: Cornell & Zhang 2025 Table 1 (β_list = 0.400; v6 renames β_list
-    to β_story for the hierarchical narrative case). v6 §2.1 Eq 2.
+    Source: Cornell & Zhang 2025 Table 1 (β_list = 0.400). Stored under the
+    ``beta_story`` name for historical continuity with the v6 MS-TCM spec;
+    the ``beta_list`` property below exposes the same value under C&Z's
+    canonical name. v6 §2.1 Eq 2 / C&Z 2025 Eq 8.
+    """
+
+    beta_rein: float = 0.300
+    """List-level context reactivation drift rate at retrieval.
+
+    Source: Cornell & Zhang 2025 Table 1 (β_rein = 0.300; C&Z 2025 Eq 14).
+    Used when the model reinstates a list-level context during recall —
+    in final free recall only. For single-list free recall the reinstated
+    context is set directly to the beginning-of-list context (e_start)
+    without drift, so β_rein is unused in that mode. Included in the
+    inventory for parity with C&Z's full Table 1.
     """
 
     gamma_fc: float = 0.315
@@ -128,6 +141,20 @@ class ModelParameters:
     seed: int = 0
     """PRNG seed for deterministic restarts and bootstrap draws."""
 
+    # --- Property aliases exposing C&Z 2025 canonical names ---
+
+    @property
+    def beta_list(self) -> float:
+        """Alias for ``beta_story``, matching C&Z 2025 canonical naming.
+
+        C&Z's Table 1 uses ``β_list``; v6 MS-TCM renamed this to ``β_story``
+        to reflect narrative-storyline semantics. The underlying parameter
+        is the same rate (list-level context drift at encoding); this
+        property lets C&Z-aligned code (``_likelihood_core.py``) use the
+        canonical name without a schema change.
+        """
+        return float(self.beta_story)
+
     # ---
 
     def __post_init__(self) -> None:
@@ -155,6 +182,10 @@ class ModelParameters:
         if not (0.0 <= self.lambda_reinstate <= 1.0):
             raise ValueError(
                 f"lambda_reinstate must be in [0, 1]; got {self.lambda_reinstate!r}"
+            )
+        if not (0.0 <= self.beta_rein <= 1.0):
+            raise ValueError(
+                f"beta_rein must be in [0, 1]; got {self.beta_rein!r}"
             )
 
         # k > 0.

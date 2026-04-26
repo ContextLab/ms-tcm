@@ -1,0 +1,28 @@
+
+Experiment 1: Immediate free recall in young and older 
+adults. 
+
+Experiment 2: Delayed free recall in young and older 
+adults.
+
+The format of the data here is as follows:
+
+    Each trial has five lines.
+    The first line gives 
+	Subject trial cumulative_trial	(Experiment 1)
+	Subject session trial condition		(Experiment 2)
+    The second line gives the indices of the words in the list in the Toronto Noun Pool.
+    The third line gives the serial position of each response.    
+    The fourth line gives the index in the Toronto Noun Pool of the response.
+    The fifth line gives the IRT in ms.
+
+    A serial position of -99 means the response was not presented to the
+	subject in that session.
+    A serial position of -n (Experiment 1) means that the response was
+	presented n lists prior.
+    A serial position of -n x 100 -m (Experiment 2) means that the response
+	was presented n lists back, where it occupied serial position m.
+    A noun pool index of 481 is an extra-list intrusion.
+    
+KahaWingJEP.pool is the nounpool used in this study.
+

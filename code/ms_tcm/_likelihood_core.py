@@ -1,58 +1,71 @@
-"""Single-source-of-truth likelihood core for MS-TCM v6 (Constitution II).
+"""C&Z 2025 hierarchical CMR for free recall (single-storyline reduction).
 
-Both Tier-1 (``likelihood.py``) and Tier-2 (``jax_backend/hcmr_jax.py``)
-delegate to this module. The math is parameterized by an ``xp`` namespace
-(``numpy`` or ``jax.numpy``) and a ``scan_fn`` for the recurrence; the
-two backends differ ONLY in which array library they pass in, not in
-which formulas they apply.
+This is the authoritative implementation of Cornell & Zhang 2025's
+hierarchical model for the free-recall case. Both Tier-1 (``likelihood.py``,
+numpy) and Tier-2 (``jax_backend/hcmr_jax.py``, jax.numpy) delegate here
+via the ``xp`` namespace. The math follows ``notes/CornZhan25.pdf`` Eqs
+1-15 literally.
 
-v6 canonical source: ``notes/two_level_cmr_v6.pdf``. Equations cited:
+Canonical equations implemented:
 
-- Eq 1: c^item_i = ρ_enc · c^item_{i-1} + β_enc · c^IN_i
-- Eq 2: c^story = ρ_story · c^story_{j-1} + β_story · c^IN_i (storyline)
-- Eq 5: ΔM^SC = g_s · (c^story_out)^T (cache on switch)
-- Eq 6: c^story_new = λ · c~^story_{s(i)} + (1 - λ) · c^story_prev
-- Eq 7: c^item ← c^story after switch/return
-- Eq 3 (C&Z 2025): c^ret drifts toward c^item_recalled at rate β_rec
-- Eq 7 (C&Z 2025): p_stop = exp(-ε_d · a^nr / a^r), sums of |a|
-- Eq 8-9: a = (M^IC)^T · c_cue; P(j|cue) = softmax(k · a)
+    Eq 1  : c^item_i = ρ c^item_{i-1} + β_enc c^IN_enc
+    Eq 2a : ΔM^FC_exp = c^item_{i-1} f_i^T    (context→item associations)
+    Eq 2b : ΔM^CF_exp = f_i c^item_{i-1}^T    (item→context, scored at retrieval)
+    Eq 3  : c^ret_j   = ρ c^ret_{j-1} + β_rec c^IN_rec
+    Eq 4  : c^IN_rec  = (1-γ_fc) M^FC_pre · f_j + γ_fc M^FC_exp · f_j
+    Eq 5  : a_j = M^CF_exp · c^ret_j          (NO primacy gradient φ_l)
+    Eq 6  : p(j)      = softmax(k · a_j)
+    Eq 7  : p_stop    = exp(-ε_d · a^nr / a^r)
+    Eq 8  : c^list_i  = ρ c^list_{i-1} + β_list c^IN_enc
+    Eq 9  : c^item_i  = c^list_i  at list boundaries
+    Eq 15 : reinstate c^item ← c^list_beginning_of_list on item-level failure
 
-Design: every array op goes through ``xp.*``; in-place updates go through
-the ``at_set`` / ``at_add`` helpers which dispatch on the namespace.
-Under numpy, the driver function uses a Python loop; under jax.numpy, it
-uses ``jax.lax.scan`` — but the per-step function body is identical.
+For free recall (single list), "beginning-of-list context" is c^list_0 =
+e_start (the orthogonal marker vector, unit-norm, orthogonal to every
+item). C&Z §"the retrieval of the list-level context, once the item-level
+context fails, is simply set to be the beginning-of-list context instead
+of through a list-level retrieval process (i.e., removing Equations 12–13
+and the parameter βpost)".
 
-Parity property (enforced by ``test_backend_parity.py``):
-    compute_list_log_likelihood(hp, ..., xp=numpy)
-        == compute_list_log_likelihood(hp, ..., xp=jnp (float64))
-within 1e-10 absolute tolerance on the full FRFR-category dataset.
+Parameter inventory (7 free for free-recall, matching C&Z 2025 Table 1):
+    β_enc   (Eq 1)    = 0.679
+    β_list  (Eq 8)    = 0.400
+    β_rec   (Eq 3)    = 0.326
+    β_rein  (Eq 14)   = 0.300  (unused in free-recall; reserved for FFR)
+    γ_fc    (Eq 4)    = 0.315
+    k       (Eq 6)    = 6.50
+    ε_d     (Eq 7)    = 1.04
+
+Primacy parameters φ_s, φ_d from base CMR are DROPPED — C&Z's hierarchical
+extension replaces them with the reinstatement fallback (Eq 15), which
+produces primacy in SPC without introducing a primacy gradient at encoding.
+
+Marginalized likelihood: the phase-transition index T ∈ {0, ..., R} is
+treated as a latent variable. The per-list log-likelihood marginalizes
+over T via logsumexp:
+
+    LL_list = logsumexp_{T=0..R}[
+        Σ_{i=1..T} log(1 - p_stop_i^(1)) + log p(s_i | c_ret^(1)_i)
+        + log p_stop_transition(c_ret^(1) after T drifts)
+        + Σ_{i=T+1..R} log(1 - p_stop_i^(2)) + log p(s_i | c_ret^(2)_i)
+        + log p_stop_final(c_ret^(2) after R-T drifts)
+    ]
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 
 # --- xp dispatch helpers -------------------------------------------------
-#
-# These tiny helpers paper over the one place numpy and jax.numpy don't
-# share an API: in-place updates. numpy uses ``x[i] = v``; jax.numpy uses
-# ``x = x.at[i].set(v)`` because JAX arrays are immutable.
 
 
 def _is_jax(xp: Any) -> bool:
-    """Return True if ``xp`` is jax.numpy (detected via ``__name__``)."""
-    name = getattr(xp, "__name__", "")
-    return name == "jax.numpy"
+    return getattr(xp, "__name__", "") == "jax.numpy"
 
 
 def at_set(x, idx, value, xp):
-    """Functional scatter: return a new array with ``x[idx] = value``.
-
-    Works for both 1-D scalar indices (``x[idx] = value``) and tuple
-    indices (``x[idx0, idx1] = value``).
-    """
     if _is_jax(xp):
         return x.at[idx].set(value)
     x = x.copy()
@@ -61,7 +74,6 @@ def at_set(x, idx, value, xp):
 
 
 def at_add(x, idx, delta, xp):
-    """Functional scatter-add: return a new array with ``x[idx] += delta``."""
     if _is_jax(xp):
         return x.at[idx].add(delta)
     x = x.copy()
@@ -69,46 +81,21 @@ def at_add(x, idx, delta, xp):
     return x
 
 
-def log_softmax_masked(scaled, mask, xp):
-    """Numerically stable log-softmax with a boolean keep-mask.
-
-    ``mask[i] = True`` keeps item i in the competition; ``mask[i] = False``
-    drives its log-probability to a large negative sentinel (-1e30) so the
-    caller can detect that reading it was an error (we never do — callers
-    always index valid items only).
-
-    This is the single softmax implementation — no scipy, no jax.nn
-    variant. Bit-identical under numpy and jax.numpy for the same dtype.
-    """
-    # Replace masked positions with a very negative sentinel BEFORE
-    # computing the max. This keeps the max/shift math well-defined when
-    # the only unmasked activations are themselves strongly negative.
+def log_softmax_masked(scaled, keep_mask, xp):
+    """Numerically stable log-softmax over keep_mask=True entries."""
     NEG = -1.0e30
-    scaled = xp.where(mask, scaled, NEG)
-    m = xp.max(scaled)
-    shifted = scaled - m
-    exp_s = xp.exp(shifted)
-    # Zero out masked positions in the exponentiated sum (where exp(NEG-m)
-    # is already tiny, but we want it to be exactly 0 so log is well-defined).
-    exp_s = xp.where(mask, exp_s, 0.0)
+    s = xp.where(keep_mask, scaled, NEG)
+    m = xp.max(s)
+    shifted = s - m
+    exp_s = xp.where(keep_mask, xp.exp(shifted), 0.0)
     denom = xp.sum(exp_s)
-    # Guard against all-masked cases (denom=0): when the entire list is
-    # already recalled, the caller's ``countable`` flag is False so the
-    # value we return here is never read, but log(0) still raises a
-    # numpy RuntimeWarning. Floor denom at 1e-300 to keep the op clean.
-    return scaled - m - xp.log(xp.maximum(denom, 1e-300))
+    return s - m - xp.log(xp.maximum(denom, 1e-300))
 
 
 def norm_preserving_rho(beta, dot, xp):
-    """ρ so ||ρ · c_prev + β · c_in|| = 1 for unit-norm c_prev, c_in.
-
-    Matches ``ms_tcm.drift._norm_preserving_rho`` exactly.
-    """
+    """ρ such that ||ρ c_prev + β c_in|| = 1 for unit-norm c_prev, c_in."""
     inner = 1.0 + beta * beta * (dot * dot - 1.0)
-    # xp.maximum handles the numpy/jax convention divergence (np.maximum is
-    # elementwise, jnp.maximum is elementwise — same semantics here).
-    safe = xp.maximum(inner, 0.0)
-    return xp.sqrt(safe) - beta * dot
+    return xp.sqrt(xp.maximum(inner, 0.0)) - beta * dot
 
 
 # --- hyperparameter bundle -----------------------------------------------
@@ -116,186 +103,65 @@ def norm_preserving_rho(beta, dot, xp):
 
 @dataclass(frozen=True)
 class CoreHyperparams:
-    """Scalar model parameters passed to the core.
+    """Scalar C&Z 2025 free-recall parameters.
 
-    Stored as Python floats so numpy and jax drivers can each cast into
-    their preferred precision at the boundary (float64 numpy / configurable
-    jax dtype).
+    Stored as Python floats so both backends cast into their preferred
+    precision at the boundary (numpy float64 / configurable jax dtype).
     """
 
     beta_enc: float
-    beta_story: float
-    gamma_fc: float  # currently unused (identity M^FC_pre); preserved for future
-    k: float
-    lambda_reinstate: float
+    beta_list: float
     beta_rec: float
+    beta_rein: float  # reserved for final-free-recall; unused in FR
+    gamma_fc: float
+    k: float
     epsilon_d: float
-    standard_tcm: bool
-    # Primacy scaling parameters (v6 §3 / Polyn et al. 2009 Eq 7).
-    # φ and ψ differ based on standard_tcm (see ms_tcm.hcmr.encode).
-    phi: float
-    psi: float
 
     @classmethod
     def from_model_parameters(cls, p) -> "CoreHyperparams":
-        """Build a CoreHyperparams from a ``ModelParameters`` instance."""
-        if p.standard_tcm:
-            phi, psi = 30.0, 0.8
-        else:
-            phi, psi = 1.5, 0.5
         return cls(
             beta_enc=float(p.beta_enc),
-            beta_story=float(p.beta_story),
+            beta_list=float(p.beta_list),
+            beta_rec=float(p.beta_rec),
+            beta_rein=float(p.beta_rein),
             gamma_fc=float(p.gamma_fc),
             k=float(p.k),
-            lambda_reinstate=float(p.lambda_reinstate),
-            beta_rec=float(p.beta_rec),
             epsilon_d=float(p.epsilon_d),
-            standard_tcm=bool(p.standard_tcm),
-            phi=phi,
-            psi=psi,
         )
 
 
-# --- encoding (per-step; scan-friendly) ----------------------------------
-
-
-def make_e_start(d: int, xp, dtype):
-    """Return e_start = (1, 0, ..., 0) as a shape-(d,) array of ``dtype``."""
-    z = xp.zeros(d, dtype=dtype)
-    return at_set(z, 0, 1.0, xp)
-
-
-def make_basis(d: int, i, xp, dtype):
-    """Return e_i as a shape-(d,) array (one-hot at position i)."""
-    z = xp.zeros(d, dtype=dtype)
-    return at_set(z, i, 1.0, xp)
-
-
-def encode_step(
-    state,
-    step_inputs,
-    hp: CoreHyperparams,
-    W: int,
-    K: int,
-    xp,
-    dtype,
-):
-    """One encoding step of the v6 hierarchical CMR.
-
-    Inputs:
-        state: (c_item, c_story_stack, m_ic, m_sc, seen, prev_cat)
-            c_item         (d,) current item-level context
-            c_story_stack  (K, d) current story context per storyline
-            m_ic           (d, W) accumulating M^IC
-            m_sc           (K, d) cached storyline contexts
-            seen           (K,) bool; True iff storyline has been encoded before
-            prev_cat       int scalar; previous step's storyline index
-                           (-1 at step 0)
-        step_inputs: (t, cat_idx)
-            t       int scalar (0..W-1)
-            cat_idx int scalar (0..K-1)
-
-    Returns:
-        new_state of the same shape.
-
-    The c^IN is the orthogonal one-hot e_{t+1} (identity M^FC_pre, v6 §1.5
-    Option 1), so all dot products with c_item / c_story collapse to a
-    single element lookup at index t+1.
-    """
-    c_item, c_story_stack, m_ic, m_sc, seen, prev_cat = state
-    t, cat_idx = step_inputs
-
-    # Boundary detection.
-    switch = (prev_cat >= 0) & (cat_idx != prev_cat)
-    cat_return = switch & seen[cat_idx]
-
-    if not hp.standard_tcm:
-        # --- Storyline switch: cache outgoing storyline to M^SC (v6 Eq 5).
-        # m_sc[prev_cat] += c_story_stack[prev_cat].
-        # We compute the cached-update unconditionally then pick via where.
-        cached_row_candidate = m_sc[prev_cat] + c_story_stack[prev_cat]
-        m_sc = xp.where(
-            switch,
-            at_set(m_sc, prev_cat, cached_row_candidate, xp),
-            m_sc,
-        )
-
-        # --- Storyline return (v6 Eq 6): blend cached context into active.
-        blended = (hp.lambda_reinstate * m_sc[cat_idx]
-                   + (1.0 - hp.lambda_reinstate) * c_story_stack[cat_idx])
-        nn = xp.sqrt(xp.sum(blended * blended))
-        blended_n = xp.where(nn > 1e-12, blended / xp.maximum(nn, 1e-30), blended)
-        c_story_stack = xp.where(
-            cat_return,
-            at_set(c_story_stack, cat_idx, blended_n, xp),
-            c_story_stack,
-        )
-
-        # --- Eq 7: on (switch OR return), sync c_item to active storyline.
-        c_item = xp.where(switch, c_story_stack[cat_idx], c_item)
-
-    # Basis-vector c^IN: e_{t+1}; dot(x, c^IN) = x[t+1].
-    t_plus_1 = t + 1
-
-    # --- Storyline drift (v6 Eq 2).
-    if not hp.standard_tcm:
-        c_story_active = c_story_stack[cat_idx]
-        dot_s = c_story_active[t_plus_1]
-        rho_s = norm_preserving_rho(hp.beta_story, dot_s, xp)
-        c_story_drifted = rho_s * c_story_active
-        c_story_drifted = at_add(c_story_drifted, t_plus_1, hp.beta_story, xp)
-        c_story_stack = at_set(c_story_stack, cat_idx, c_story_drifted, xp)
-
-    # --- Item-level drift (v6 Eq 1).
-    dot_i = c_item[t_plus_1]
-    rho_i = norm_preserving_rho(hp.beta_enc, dot_i, xp)
-    c_item = rho_i * c_item
-    c_item = at_add(c_item, t_plus_1, hp.beta_enc, xp)
-
-    # --- M^IC update: M^IC[:, t] += primacy(t) · c_item.
-    primacy = 1.0 + hp.phi * xp.exp(-hp.psi * xp.asarray(t, dtype=dtype))
-    # at_add with tuple index (:, t) doesn't map cleanly across backends;
-    # instead, add primacy * c_item to the t-th column directly.
-    m_ic_col = m_ic[:, t] + primacy * c_item
-    m_ic = at_set(m_ic, (slice(None), t), m_ic_col, xp)
-
-    # --- Bookkeeping.
-    seen = at_set(seen, cat_idx, True, xp)
-    prev_cat = cat_idx
-
-    return (c_item, c_story_stack, m_ic, m_sc, seen, prev_cat)
+# --- encoding -------------------------------------------------------------
 
 
 def run_encoding(
     hp: CoreHyperparams,
-    cat_indices,
     W: int,
-    K: int,
     xp,
     dtype,
 ):
-    """Run the W-step encoding loop and return (c_item_traj, m_ic).
+    """Run the W-step C&Z encoding and return (c_item_traj, M_fc_exp, M_cf_exp).
 
-    Under numpy, uses a Python ``for`` loop. Under jax.numpy, uses
-    ``jax.lax.scan`` (which compiles to a single XLA op). The per-step
-    function (``encode_step``) is identical in both cases.
+    Inputs (basis-vector c^IN_enc = e_{t+1} — identity M^FC_pre). Returns:
+
+    - ``c_item_traj`` : (W+1, d) item-level context after each encoding step.
+      Row 0 = e_start; rows 1..W = c_item after each step.
+    - ``M_fc_exp``    : (d, W) experimental context→item matrix (Eq 2a).
+    - ``M_cf_exp``    : (W, d) experimental item→context matrix (Eq 2b).
+
+    Note that free recall uses a single "storyline", so no storyline-level
+    bookkeeping (M^SC, storyline returns, etc.) is needed — those are
+    final-free-recall machinery we will add back when extending the model.
     """
     d = W + 1
-    # Initial state.
-    e_start = make_e_start(d, xp, dtype)
+
+    # Initial state: c_item = c_list = e_start.
+    e_start = xp.zeros(d, dtype=dtype)
+    e_start = at_set(e_start, 0, 1.0, xp)
     c_item = e_start
-    c_story_stack = xp.broadcast_to(e_start, (K, d))
-    # ``broadcast_to`` in numpy returns a read-only view; make it writable.
-    if not _is_jax(xp):
-        c_story_stack = xp.array(c_story_stack)  # materialize a fresh array
-    m_ic = xp.zeros((d, W), dtype=dtype)
-    m_sc = xp.zeros((K, d), dtype=dtype)
-    seen = xp.zeros(K, dtype=bool)
-    prev_cat = xp.asarray(-1, dtype=xp.int32 if _is_jax(xp) else None)
-    # For numpy, use a plain int; the xp.int32 requirement is a JAX-ism.
-    if not _is_jax(xp):
-        prev_cat = -1  # plain Python int works under numpy
+    c_list = e_start
+
+    m_fc_exp = xp.zeros((d, W), dtype=dtype)
+    m_cf_exp = xp.zeros((W, d), dtype=dtype)
 
     c_item_traj = xp.zeros((W + 1, d), dtype=dtype)
     c_item_traj = at_set(c_item_traj, 0, e_start, xp)
@@ -303,266 +169,487 @@ def run_encoding(
     if _is_jax(xp):
         import jax
 
-        def scan_body(state, inp):
-            new_state = encode_step(state, inp, hp, W, K, xp, dtype)
-            return new_state, new_state[0]  # yield c_item
+        def step(carry, t):
+            c_item, c_list, m_fc_exp, m_cf_exp = carry
+
+            # Eq 2a,b: column/row updates using PRE-drift c_item.
+            m_fc_exp = at_set(m_fc_exp, (slice(None), t), m_fc_exp[:, t] + c_item, xp)
+            m_cf_exp = at_set(m_cf_exp, (t, slice(None)), m_cf_exp[t, :] + c_item, xp)
+
+            # Basis-vector c^IN_enc = e_{t+1}: dot(c, e_{t+1}) = c[t+1].
+            t_plus_1 = t + 1
+
+            # Eq 1: item-level drift.
+            dot_i = c_item[t_plus_1]
+            rho_i = norm_preserving_rho(hp.beta_enc, dot_i, xp)
+            c_item = rho_i * c_item
+            c_item = at_add(c_item, t_plus_1, hp.beta_enc, xp)
+
+            # Eq 8: list-level drift (slower rate).
+            dot_l = c_list[t_plus_1]
+            rho_l = norm_preserving_rho(hp.beta_list, dot_l, xp)
+            c_list = rho_l * c_list
+            c_list = at_add(c_list, t_plus_1, hp.beta_list, xp)
+
+            return (c_item, c_list, m_fc_exp, m_cf_exp), c_item
 
         t_arr = xp.arange(W, dtype=xp.int32)
-        init_state = (c_item, c_story_stack, m_ic, m_sc, seen, prev_cat)
-        (c_item_final, _, m_ic_final, _, _, _), c_item_steps = jax.lax.scan(
-            scan_body, init_state, (t_arr, cat_indices),
-        )
+        init = (c_item, c_list, m_fc_exp, m_cf_exp)
+        (_, _, m_fc_final, m_cf_final), c_item_steps = jax.lax.scan(step, init, t_arr)
         c_item_traj = xp.concatenate([e_start[None, :], c_item_steps], axis=0)
-        return c_item_traj, m_ic_final
+        return c_item_traj, m_fc_final, m_cf_final
 
-    # numpy path: explicit Python loop.
-    state = (c_item, c_story_stack, m_ic, m_sc, seen, prev_cat)
+    # numpy path
     for t in range(W):
-        state = encode_step(
-            state,
-            (t, int(cat_indices[t])),
-            hp, W, K, xp, dtype,
-        )
-        c_item_traj = at_set(c_item_traj, t + 1, state[0], xp)
-    _, _, m_ic_final, _, _, _ = state
-    return c_item_traj, m_ic_final
+        m_fc_exp = at_set(m_fc_exp, (slice(None), t), m_fc_exp[:, t] + c_item, xp)
+        m_cf_exp = at_set(m_cf_exp, (t, slice(None)), m_cf_exp[t, :] + c_item, xp)
+        t_plus_1 = t + 1
+        dot_i = c_item[t_plus_1]
+        rho_i = norm_preserving_rho(hp.beta_enc, dot_i, xp)
+        c_item = rho_i * c_item
+        c_item = at_add(c_item, t_plus_1, hp.beta_enc, xp)
+        dot_l = c_list[t_plus_1]
+        rho_l = norm_preserving_rho(hp.beta_list, dot_l, xp)
+        c_list = rho_l * c_list
+        c_list = at_add(c_list, t_plus_1, hp.beta_list, xp)
+        c_item_traj = at_set(c_item_traj, t + 1, c_item, xp)
+
+    return c_item_traj, m_fc_exp, m_cf_exp
 
 
-# --- retrieval + stopping ------------------------------------------------
+# --- retrieval helpers ---------------------------------------------------
 
 
-def activation(m_ic, c_cue, xp):
-    """a = (M^IC)^T @ c_cue. Shape: (W,)."""
-    return m_ic.T @ c_cue
+def activation(m_cf_exp, c_ret, xp):
+    """Eq 5: a = M^CF_exp · c_ret. Shape: (W,)."""
+    return m_cf_exp @ c_ret
 
 
-def stopping_log_terms(
-    m_ic, c_ret, already_mask, hp: CoreHyperparams, xp,
-):
-    """Return (p_stop, log(1 - p_stop), log(p_stop)).
-
-    Implements C&Z 2025 Eq 7 with |a| sums (matches
-    ``HierarchicalCMRModel.stopping_prob_after_recalls``).
-
-    Numerical guards:
-    - ``a_r = 0`` (no recalls yet, or all-zero activations on recalled
-      items): p_stop is set to 0 (the stopping rule is undefined without
-      at least one recall's worth of activation). log(1-p_stop) = 0;
-      log(p_stop) = log(1e-300) as a sentinel (caller should not use it
-      in that case).
-    """
-    a = activation(m_ic, c_ret, xp)
+def compute_p_stop(m_cf_exp, c_ret, already_mask, epsilon_d, xp):
+    """Eq 7: p_stop = exp(-ε_d · a^nr / a^r). Sums are over |a|."""
+    a = activation(m_cf_exp, c_ret, xp)
     a_abs = xp.abs(a)
     a_r = xp.sum(xp.where(already_mask, a_abs, 0.0))
     a_nr = xp.sum(xp.where(already_mask, 0.0, a_abs))
     ratio = a_nr / xp.maximum(a_r, 1e-30)
-    p_stop_raw = xp.exp(-hp.epsilon_d * ratio)
-    # When a_r is effectively zero, force p_stop = 0.
-    p_stop = xp.where(a_r > 0.0, p_stop_raw, 0.0)
-    # Numerically guarded logs.
-    log_1m = xp.log(xp.maximum(1.0 - p_stop, 1e-300))
-    log_p = xp.log(xp.maximum(p_stop, 1e-300))
-    return p_stop, log_1m, log_p
+    p_stop_raw = xp.exp(-epsilon_d * ratio)
+    return xp.where(a_r > 0.0, p_stop_raw, 0.0)
 
 
-def drift_retrieval_context(c_ret, beta_rec: float, c_target, xp):
-    """C&Z 2025 Eq 3: c_ret <- ρ_rec · c_ret + β_rec · c_target.
-
-    Matches ``ms_tcm.retrieval.drift_retrieval_context`` exactly.
-    """
-    dot = xp.sum(c_ret * c_target)
+def drift_c_ret(c_ret, c_IN_rec, beta_rec, xp):
+    """Eq 3: c^ret = ρ · c^ret + β_rec · c^IN_rec."""
+    dot = xp.sum(c_ret * c_IN_rec)
     rho = norm_preserving_rho(beta_rec, dot, xp)
-    return rho * c_ret + beta_rec * c_target
+    return rho * c_ret + beta_rec * c_IN_rec
 
 
-def recall_step(
-    state,
-    step_inputs,
-    hp: CoreHyperparams,
-    W: int,
-    c_item_traj,
-    m_ic,
-    xp,
-    dtype,
-):
-    """One recall step: contributes log(1 - p_stop) + log(p[sp]) to log_l.
+def c_IN_rec_of(idx, m_fc_exp, gamma_fc, d, xp, dtype):
+    """Eq 4: c^IN_rec = (1-γ_fc) M^FC_pre · f_j + γ_fc M^FC_exp · f_j.
 
-    This is the single scan-friendly body that both backends use. The
-    ordering of operations matches ``ms_tcm.likelihood.list_log_likelihood``:
-
-    1. If this row is valid AND NOT a repeat AND there is at least one
-       prior valid non-repeat recall, add ``log(1 - p_stop_pre_drift)``
-       using the current c_ret. Stopping is NOT consulted on repeats
-       (Tier-1 skips stopping + scoring on repeats; only prev_idx advances).
-    2. If this row is valid AND NOT a repeat AND has_prior, drift c_ret
-       toward e_{prev_idx+1} (C&Z 2025 Eq 3; identity M^FC_pre target).
-    3. If this row is valid AND NOT a repeat, compute log_softmax of
-       k·M^IC^T@c_ret (masking already_mask) and add log_p[sp-1].
-    4. On valid non-repeat rows: mark sp-1 as recalled; reset c_ret to
-       c_item_traj[sp] (reactivation; C&Z 2025 Fig 1b); advance prev_idx.
-       On valid REPEAT rows: leave already_mask, c_ret, and log_l
-       unchanged; advance prev_idx to this sp's idx (so the next valid
-       non-repeat's drift targets the repeat's sp, matching Tier-1
-       ``prev_sp = sp; continue``).
+    Under identity M^FC_pre, M^FC_pre · f_j = e_{idx+1} (a basis vector).
+    The experimental branch reads the column M^FC_exp[:, idx].
     """
-    c_ret, already_mask, log_l, prev_idx = state
-    sp, valid = step_inputs
-    # sp is 1-based; subtract 1 for zero-based internal indexing.
-    idx = xp.clip(sp - 1, 0, W - 1)
-    is_repeat = already_mask[idx]
-    # A "countable" step is valid AND not a repeat: only countable steps
-    # contribute stopping + score terms and update c_ret / already_mask.
-    countable = valid & ~is_repeat
-
-    # (1) Stopping-rule contribution on pre-drift c_ret.
-    _, log_1m_pstop, _ = stopping_log_terms(
-        m_ic, c_ret, already_mask, hp, xp,
-    )
-    has_prior = prev_idx >= 0
-    stop_contrib = xp.where(has_prior & countable, log_1m_pstop, 0.0)
-    log_l = log_l + stop_contrib
-
-    # (2) Apply beta_rec drift on countable non-first recalls.
-    d = c_ret.shape[0]
-    prev_idx_safe = xp.clip(prev_idx + 1, 0, d - 1)
-    # Drift target is e_{prev_idx+1}. dot(c_ret, e_i) = c_ret[i].
-    dot_r = c_ret[prev_idx_safe]
-    rho_r = norm_preserving_rho(hp.beta_rec, dot_r, xp)
-    c_ret_drifted_full = rho_r * c_ret
-    c_ret_drifted_full = at_add(
-        c_ret_drifted_full, prev_idx_safe, hp.beta_rec, xp,
-    )
-    apply_drift = has_prior & countable
-    c_ret_drifted = xp.where(apply_drift, c_ret_drifted_full, c_ret)
-
-    # (3) Score against list (on countable rows only).
-    a = activation(m_ic, c_ret_drifted, xp)
-    keep_mask = ~already_mask
-    log_p_all = log_softmax_masked(hp.k * a, keep_mask, xp)
-    score_contrib = xp.where(countable, log_p_all[idx], 0.0)
-    log_l = log_l + score_contrib
-
-    # (4) Update state.
-    # - already_mask: mark sp-1 on countable rows; repeats/padding leave it.
-    # - c_ret: reset to c_item_traj[sp] on countable; repeats/padding leave
-    #   c_ret at c_ret_drifted (which, when countable=False, is identical
-    #   to the original c_ret since apply_drift=False → no drift applied).
-    # - prev_idx: advance to idx whenever valid (repeat or not), matching
-    #   Tier-1's ``prev_sp = sp; continue`` on repeats.
-    sp_safe = xp.clip(sp, 0, W)
-    new_already = xp.where(
-        countable,
-        at_set(already_mask, idx, True, xp),
-        already_mask,
-    )
-    new_c_ret = xp.where(
-        countable,
-        c_item_traj[sp_safe],
-        c_ret_drifted,
-    )
-    new_prev_idx = xp.where(valid, idx, prev_idx)
-
-    return (new_c_ret, new_already, log_l, new_prev_idx)
+    pre = xp.zeros(d, dtype=dtype)
+    pre = at_set(pre, idx + 1, 1.0, xp)
+    exp_col = m_fc_exp[:, idx]
+    return (1.0 - gamma_fc) * pre + gamma_fc * exp_col
 
 
-def run_recalls(
-    hp: CoreHyperparams,
-    c_item_traj,
-    m_ic,
-    recall_sps,
-    recall_mask,
-    W: int,
-    xp,
-    dtype,
-):
-    """Drive the recall-step scan; returns (log_l, c_ret_final, already_final, prev_idx_final)."""
-    c_ret_init = c_item_traj[W]  # end-of-list cue
-    already_init = xp.zeros(W, dtype=bool)
-    log_l_init = xp.asarray(0.0, dtype=dtype)
-    prev_idx_init = xp.asarray(-1, dtype=xp.int32) if _is_jax(xp) else -1
-    state = (c_ret_init, already_init, log_l_init, prev_idx_init)
-
-    if _is_jax(xp):
-        import jax
-
-        def scan_body(state, inp):
-            new_state = recall_step(
-                state, inp, hp, W, c_item_traj, m_ic, xp, dtype,
-            )
-            return new_state, None
-
-        final_state, _ = jax.lax.scan(
-            scan_body, state, (recall_sps, recall_mask),
-        )
-        return final_state
-
-    # numpy path
-    R = len(recall_sps)
-    for r in range(R):
-        state = recall_step(
-            state,
-            (int(recall_sps[r]), bool(recall_mask[r])),
-            hp, W, c_item_traj, m_ic, xp, dtype,
-        )
-    return state
-
-
-# --- top-level per-list likelihood ---------------------------------------
+# --- per-list log-likelihood (marginalized over phase-transition) --------
 
 
 def compute_list_log_likelihood(
     hp: CoreHyperparams,
-    cat_indices,
-    recall_sps,
-    recall_mask,
     W: int,
-    K: int,
+    recall_sps,    # (R,) int: 1-based serial positions; 0 = padding/intrusion
+    recall_mask,   # (R,) bool: True for valid recall slots
     xp,
     dtype,
 ):
-    """End-to-end per-list log-likelihood.
+    """End-to-end per-list log-likelihood under C&Z 2025 free-recall.
 
-    Semantics (must match ``ms_tcm.likelihood.list_log_likelihood`` exactly):
+    The observed recall sequence s_1, ..., s_R (from ``recall_sps`` at
+    positions where ``recall_mask`` is True) is marginalized over the
+    latent phase-transition index T ∈ {0, ..., R}:
 
-    - Encoding runs for W steps producing c_item_traj (W+1, d) and M^IC.
-    - First recall: softmax over k · M^IC^T @ c_item_end.
-    - Each subsequent recall contributes log(1 - p_stop) on the pre-drift
-      c_ret, then drift c_ret, then log(softmax(k · a)) at the observed sp.
-    - After all recalls: log(p_stop) at termination.
-    - Free-recall-only stopping terms are ACTIVE when paradigm=='free_recall';
-      the hyperparameter object does not carry paradigm, so stopping is
-      always included here. Callers in cued-recall drop stopping contributions
-      by setting ε_d → large (p_stop → 0) — but in practice MS-TCM on the
-      FRFR-category dataset is always free-recall. If cued-recall support
-      is needed, the caller passes a flag to skip stopping; the current
-      FRFR-only API does not need that path.
+        LL_list = logsumexp_{T=0..R} LL_T
+
+    where LL_T is the log-likelihood conditional on the first T recalls
+    being in phase 1 (cued by c_item_end, drifted via β_rec) and the
+    remaining R-T recalls being in phase 2 (cued by e_start, drifted
+    via β_rec). The transition itself contributes log(p_stop) at the
+    c_ret value after T phase-1 drifts; the final stop (after the last
+    phase-2 recall) contributes log(p_stop) again.
+
+    This function uses a Python/numpy-style loop when ``xp`` is numpy;
+    under jax.numpy the loop is driven by ``jax.lax.scan`` with vmap
+    over T for parallel evaluation. Both produce bit-identical results
+    up to float rounding.
     """
-    c_item_traj, m_ic = run_encoding(hp, cat_indices, W, K, xp, dtype)
+    d = W + 1
+    c_item_traj, m_fc_exp, m_cf_exp = run_encoding(hp, W, xp, dtype)
 
-    c_ret_final, already_final, log_l_after_scan, prev_idx_final = run_recalls(
-        hp, c_item_traj, m_ic, recall_sps, recall_mask, W, xp, dtype,
+    # Phase 1 starts with c_ret = c_item_end (end-of-list cue).
+    c_ret_init_phase1 = c_item_traj[W]
+    # Phase 2 starts with c_ret = e_start (beginning-of-list context).
+    c_ret_init_phase2 = xp.zeros(d, dtype=dtype)
+    c_ret_init_phase2 = at_set(c_ret_init_phase2, 0, 1.0, xp)
+
+    # Determine R = number of valid recalls.
+    # recall_mask[i] = True iff recall i is valid (not padding).
+    R_total = recall_sps.shape[0]
+
+    # For each phase-1 length T in {0, 1, ..., R_total}, compute LL_T.
+    # We do this by simulating both phase 1 and phase 2 forward, recording
+    # per-step "running log-prob given we haven't transitioned yet" and
+    # "running log-prob given we have already transitioned at step t=K".
+    # Then LL_T = phase1_ll(T) + log(p_stop at c_ret_phase1 after T drifts)
+    #           + phase2_ll(R-T, with R_valid = count of valid entries)
+    #           + log(p_stop_final at c_ret_phase2 after R-T drifts)
+    #
+    # Because T ranges over all recall counts, padding rows (valid=False)
+    # must be ignored. We precompute forward passes of phase 1 and phase 2
+    # producing length-(R_total+1) arrays of c_ret states and cumulative
+    # LL up to each step; the "after T drifts" state is c_ret_trajectory[T].
+
+    # --- Phase-1 forward pass ---
+    # Tracks state: c_ret. At each step, if recall_mask[i] is True and
+    # sp[i] is a valid 1-based index:
+    #   contrib_i = log(1 - p_stop(c_ret)) + log_softmax[sp-1]
+    #   c_ret ← drift(c_ret, c_IN_rec(sp-1))
+    # Padded (valid=False) steps contribute 0 and leave c_ret untouched.
+
+    def _forward_phase(c_ret_init):
+        """Roll c_ret and already_mask forward through all R_total slots.
+
+        Returns:
+        - cum_ll     : (R_total+1,) cumulative LL through step-i-inclusive
+                       (counting only valid non-padding slots).
+        - c_ret_traj : (R_total+1, d) c_ret at the START of each slot.
+        - mask_traj  : (R_total+1, W) already-recalled mask at START of each slot.
+
+        Contributions include ``log(1 - p_stop)`` at the pre-drift c_ret AND
+        ``log softmax_masked(k·a)`` at the observed sp. The transition
+        term ``log p_stop`` is NOT included here — the caller adds it for
+        each T hypothesis using ``c_ret_traj[T]`` and ``mask_traj[T]``.
+
+        Masking: at slot i, the already_mask reflects valid recalls
+        observed in slots 0..i-1; padding slots leave it unchanged.
+        """
+        if _is_jax(xp):
+            import jax
+
+            def step(carry, slot):
+                c_ret, cum, already_mask = carry
+                sp, valid = slot
+                idx = xp.clip(sp - 1, 0, W - 1)
+                # Repeats are treated as noise (no score contribution, no
+                # stopping contribution, no state update). This matches the
+                # pre-refactor v6 likelihood's repeat-tolerance behavior.
+                is_repeat = already_mask[idx]
+                countable = valid & ~is_repeat
+                p_stop = compute_p_stop(
+                    m_cf_exp, c_ret, already_mask, hp.epsilon_d, xp,
+                )
+                log_1m = xp.log(xp.maximum(1.0 - p_stop, 1e-300))
+                a = activation(m_cf_exp, c_ret, xp)
+                log_p = log_softmax_masked(hp.k * a, ~already_mask, xp)
+                contrib = xp.where(countable, log_1m + log_p[idx], 0.0)
+                new_cum = cum + contrib
+                # drift
+                c_IN = c_IN_rec_of(idx, m_fc_exp, hp.gamma_fc, d, xp, dtype)
+                c_ret_drifted = drift_c_ret(c_ret, c_IN, hp.beta_rec, xp)
+                new_c_ret = xp.where(countable, c_ret_drifted, c_ret)
+                new_mask = xp.where(
+                    countable,
+                    at_set(already_mask, idx, True, xp),
+                    already_mask,
+                )
+                return (new_c_ret, new_cum, new_mask), (new_c_ret, new_cum, new_mask)
+
+            init = (c_ret_init, xp.asarray(0.0, dtype=dtype),
+                    xp.zeros(W, dtype=bool))
+            _, (c_ret_1toR, cum_1toR, mask_1toR) = jax.lax.scan(
+                step, init, (recall_sps, recall_mask),
+            )
+            c_ret_traj = xp.concatenate(
+                [c_ret_init[None, :], c_ret_1toR], axis=0,
+            )
+            cum_ll = xp.concatenate(
+                [xp.zeros((1,), dtype=dtype), cum_1toR], axis=0,
+            )
+            mask_traj = xp.concatenate(
+                [xp.zeros((1, W), dtype=bool), mask_1toR], axis=0,
+            )
+            return cum_ll, c_ret_traj, mask_traj
+
+        # numpy path
+        c_ret = (c_ret_init.copy() if hasattr(c_ret_init, 'copy')
+                 else xp.array(c_ret_init))
+        cum = 0.0
+        cum_ll = xp.zeros((R_total + 1,), dtype=dtype)
+        c_ret_traj = xp.zeros((R_total + 1, d), dtype=dtype)
+        mask_traj = xp.zeros((R_total + 1, W), dtype=bool)
+        c_ret_traj = at_set(c_ret_traj, 0, c_ret, xp)
+        already_mask = xp.zeros(W, dtype=bool)
+        for i in range(R_total):
+            sp = int(recall_sps[i])
+            valid = bool(recall_mask[i])
+            idx = max(0, min(W - 1, sp - 1))
+            is_repeat = bool(already_mask[idx])
+            countable = valid and not is_repeat
+            p_stop = compute_p_stop(
+                m_cf_exp, c_ret, already_mask, hp.epsilon_d, xp,
+            )
+            log_1m = float(xp.log(max(1.0 - float(p_stop), 1e-300)))
+            a = activation(m_cf_exp, c_ret, xp)
+            log_p = log_softmax_masked(hp.k * a, ~already_mask, xp)
+            contrib = (log_1m + float(log_p[idx])) if countable else 0.0
+            cum = cum + contrib
+            if countable:
+                c_IN = c_IN_rec_of(idx, m_fc_exp, hp.gamma_fc, d, xp, dtype)
+                c_ret = drift_c_ret(c_ret, c_IN, hp.beta_rec, xp)
+                already_mask = at_set(already_mask, idx, True, xp)
+            cum_ll = at_set(cum_ll, i + 1, cum, xp)
+            c_ret_traj = at_set(c_ret_traj, i + 1, c_ret, xp)
+            mask_traj = at_set(mask_traj, i + 1, already_mask, xp)
+        return cum_ll, c_ret_traj, mask_traj
+
+    cum_ll_phase1, c_ret_traj_phase1, mask_traj_phase1 = _forward_phase(
+        c_ret_init_phase1,
+    )
+    cum_ll_phase2, c_ret_traj_phase2, mask_traj_phase2 = _forward_phase(
+        c_ret_init_phase2,
     )
 
-    # Terminal stopping contribution: log(p_stop) after last valid recall.
-    _, _, log_pstop = stopping_log_terms(
-        m_ic, c_ret_final, already_final, hp, xp,
+    # Wait — phase 2 starts with c_ret = e_start AND already_mask reflecting
+    # the recalls that happened in phase 1. So a separate phase-2 pass for
+    # each T would differ by the initial already_mask. But the already_mask
+    # evolution across slots is INVARIANT to T (it's the observed sequence's
+    # cumulative recalled set). So mask_traj_phase1 == mask_traj_phase2 —
+    # both reflect the same observed cumulative recalls. Good: we can use
+    # mask_traj_phase1 as THE mask evolution for both phases.
+    #
+    # What DOES differ across T is c_ret: under T=t, the first t slots use
+    # phase-1 c_ret (drifts from c_item_end), and slots t..R use phase-2
+    # c_ret (drifts from e_start). Because our two forward passes compute
+    # c_ret assuming each phase is active for ALL slots, we have:
+    #   For T=t:
+    #     slots 0..t-1 use c_ret_traj_phase1[0..t-1]   (correct)
+    #     slots t..R-1 use c_ret_traj_phase2[0..R-1-t] (but our phase-2
+    #       forward started from slot 0 with e_start and drifts from
+    #       there, which DOESN'T match — the correct phase-2 c_ret for
+    #       slot t (the first phase-2 slot) is e_start, and for slot t+k
+    #       is e_start drifted by the RECALLS observed at slots t, t+1,
+    #       ..., t+k-1. That matches c_ret_traj_phase2[k].)
+    #
+    # So the phase-2 contribution for slots t..R-1 uses c_ret_traj_phase2
+    # SHIFTED — specifically slot (t+k) in the observed sequence uses
+    # c_ret_traj_phase2[k]. This is delicate.
+    #
+    # But cum_ll_phase2[i] assumes slots 0..i-1 were ALL phase-2. If
+    # under T=t the first t slots are phase-1 and slots t..R-1 are
+    # phase-2, we want:
+    #   phase1_contrib = cum_ll_phase1[t]
+    #   phase2_contrib = cum_ll_phase2[R - t]   (the first R-t phase-2
+    #                      contributions, computed from c_ret=e_start
+    #                      drifting through the observed recalls at
+    #                      slots t, t+1, ..., R-1)
+    # But THAT requires the phase-2 forward to process the SAME observed
+    # recall sequence shifted — i.e., recall_sps[t], recall_sps[t+1], ...
+    # Running a separate phase-2 forward for each t is O(R^2 W). That's
+    # tractable for Kahana scale (R ≤ 10, so 55 passes per list).
+    #
+    # Actually, the observation above is key: once we're in phase 2, the
+    # c_ret evolution depends only on the OBSERVED RECALL SEQUENCE FROM
+    # THAT POINT ON. Because phase-2 starts fresh at e_start, then drifts
+    # toward c_IN_rec of whichever item was observed, the cumulative
+    # contribution depends on recall_sps[t:] in order. So we CANNOT reuse
+    # cum_ll_phase2 unless we re-run phase-2 with each different starting
+    # slot. That's R+1 re-runs. Let's do it.
+
+    # Re-run phase-2 for each starting slot t in {0, ..., R_total}.
+    # For t=R_total, phase-2 is empty (0 recalls), final c_ret = e_start.
+    # For t=0, phase-2 is full (all R_total slots).
+
+    # Prepare arrays to hold phase-2 results per starting-slot t.
+    ll_per_T = _compute_ll_per_T(
+        R_total=R_total, W=W, d=d,
+        c_ret_traj_phase1=c_ret_traj_phase1,
+        cum_ll_phase1=cum_ll_phase1,
+        mask_traj=mask_traj_phase1,
+        recall_sps=recall_sps, recall_mask=recall_mask,
+        m_fc_exp=m_fc_exp, m_cf_exp=m_cf_exp,
+        hp=hp, xp=xp, dtype=dtype,
+        c_ret_init_phase2=c_ret_init_phase2,
     )
-    log_l_final = log_l_after_scan + xp.where(
-        prev_idx_final >= 0, log_pstop, 0.0,
-    )
-    return log_l_final
+
+    # logsumexp over T.
+    m = xp.max(ll_per_T)
+    return m + xp.log(xp.sum(xp.exp(ll_per_T - m)))
 
 
-# --- numpy convenience wrapper -------------------------------------------
+def _compute_ll_per_T(
+    *, R_total, W, d,
+    c_ret_traj_phase1, cum_ll_phase1, mask_traj,
+    recall_sps, recall_mask,
+    m_fc_exp, m_cf_exp, hp, xp, dtype,
+    c_ret_init_phase2,
+):
+    """Compute LL for each phase-transition index T ∈ {0, ..., R_total}.
+
+    Phase-2 starts fresh at e_start for each T and processes the observed
+    recalls at slots T, T+1, ..., R_total-1 using the observed-sequence
+    already_mask trajectory.
+
+    Implementation:
+    - Under JAX: vmaps a single-T phase-2 forward across all T values; each
+      single-T forward is a ``lax.scan`` over R_total slots gated by a
+      ``slot_idx >= T`` mask. JIT-compile cost is O(W) regardless of R.
+    - Under numpy: explicit double loop over (T, slot). Slow but correct.
+    """
+    if _is_jax(xp):
+        return _compute_ll_per_T_jax(
+            R_total=R_total, W=W, d=d,
+            c_ret_traj_phase1=c_ret_traj_phase1,
+            cum_ll_phase1=cum_ll_phase1, mask_traj=mask_traj,
+            recall_sps=recall_sps, recall_mask=recall_mask,
+            m_fc_exp=m_fc_exp, m_cf_exp=m_cf_exp,
+            hp=hp, xp=xp, dtype=dtype,
+            c_ret_init_phase2=c_ret_init_phase2,
+        )
+
+    # numpy: straightforward double loop.
+    ll_per_T = xp.zeros((R_total + 1,), dtype=dtype)
+    for T in range(R_total + 1):
+        phase1_ll = cum_ll_phase1[T]
+        c_ret_at_trans = c_ret_traj_phase1[T]
+        mask_at_trans = mask_traj[T]
+        p_stop_trans = compute_p_stop(
+            m_cf_exp, c_ret_at_trans, mask_at_trans, hp.epsilon_d, xp,
+        )
+        log_trans = xp.log(xp.maximum(p_stop_trans, 1e-300))
+
+        c_ret = c_ret_init_phase2
+        mask = mask_at_trans
+        phase2_ll = xp.asarray(0.0, dtype=dtype)
+        for i in range(T, R_total):
+            sp = recall_sps[i]
+            valid = recall_mask[i]
+            idx = xp.clip(sp - 1, 0, W - 1)
+            is_repeat = mask[idx]
+            count_this = valid & ~is_repeat
+            p_stop_i = compute_p_stop(
+                m_cf_exp, c_ret, mask, hp.epsilon_d, xp,
+            )
+            log_1m_i = xp.log(xp.maximum(1.0 - p_stop_i, 1e-300))
+            a = activation(m_cf_exp, c_ret, xp)
+            log_p_i = log_softmax_masked(hp.k * a, ~mask, xp)
+            contrib_i = xp.where(count_this, log_1m_i + log_p_i[idx], 0.0)
+            phase2_ll = phase2_ll + contrib_i
+            c_IN = c_IN_rec_of(idx, m_fc_exp, hp.gamma_fc, d, xp, dtype)
+            c_ret_drifted = drift_c_ret(c_ret, c_IN, hp.beta_rec, xp)
+            c_ret = xp.where(count_this, c_ret_drifted, c_ret)
+            mask = xp.where(
+                count_this, at_set(mask, idx, True, xp), mask,
+            )
+
+        p_stop_final = compute_p_stop(m_cf_exp, c_ret, mask, hp.epsilon_d, xp)
+        log_final = xp.log(xp.maximum(p_stop_final, 1e-300))
+        ll_T = phase1_ll + log_trans + phase2_ll + log_final
+        ll_per_T = at_set(ll_per_T, T, ll_T, xp)
+
+    return ll_per_T
+
+
+def _compute_ll_per_T_jax(
+    *, R_total, W, d,
+    c_ret_traj_phase1, cum_ll_phase1, mask_traj,
+    recall_sps, recall_mask,
+    m_fc_exp, m_cf_exp, hp, xp, dtype,
+    c_ret_init_phase2,
+):
+    """JAX path for ``_compute_ll_per_T``: O(W) compile cost via scan+vmap.
+
+    For each candidate T, runs a single ``lax.scan`` over R_total slots.
+    The scan body checks ``slot_idx >= T`` to decide whether the slot
+    contributes (phase 2 active) or is skipped (still in phase 1).
+    """
+    import jax
+
+    # Helper: phase-2 forward for a SINGLE T value.
+    # State: (c_ret, mask, cum_phase2_ll).
+    def phase2_for_T(T):
+        # Initial mask = phase-1's accumulated mask AT slot T.
+        init_mask = mask_traj[T]
+        init = (
+            c_ret_init_phase2,
+            init_mask,
+            xp.asarray(0.0, dtype=dtype),
+        )
+
+        # Scan over all R_total slots; gate by `slot_idx >= T`. Repeats
+        # are treated as noise (skip score+state-update like v6 core).
+        def step(carry, slot_data):
+            c_ret, mask, cum = carry
+            slot_idx, sp, valid = slot_data
+            in_phase2 = slot_idx >= T
+            idx = xp.clip(sp - 1, 0, W - 1)
+            is_repeat = mask[idx]
+            count_this = valid & in_phase2 & ~is_repeat
+
+            p_stop = compute_p_stop(
+                m_cf_exp, c_ret, mask, hp.epsilon_d, xp,
+            )
+            log_1m = xp.log(xp.maximum(1.0 - p_stop, 1e-300))
+            a = activation(m_cf_exp, c_ret, xp)
+            log_p = log_softmax_masked(hp.k * a, ~mask, xp)
+            contrib = xp.where(count_this, log_1m + log_p[idx], 0.0)
+            new_cum = cum + contrib
+
+            # Drift & mask update only on counted slots.
+            c_IN = c_IN_rec_of(idx, m_fc_exp, hp.gamma_fc, d, xp, dtype)
+            c_ret_drifted = drift_c_ret(c_ret, c_IN, hp.beta_rec, xp)
+            new_c_ret = xp.where(count_this, c_ret_drifted, c_ret)
+            new_mask = xp.where(
+                count_this, at_set(mask, idx, True, xp), mask,
+            )
+            return (new_c_ret, new_mask, new_cum), None
+
+        slot_idxs = xp.arange(R_total, dtype=xp.int32)
+        (c_ret_final, mask_final, cum_final), _ = jax.lax.scan(
+            step, init, (slot_idxs, recall_sps, recall_mask),
+        )
+
+        # Phase-1 contribution + transition log_p_stop.
+        phase1_ll = cum_ll_phase1[T]
+        c_ret_at_trans = c_ret_traj_phase1[T]
+        mask_at_trans = mask_traj[T]
+        p_stop_trans = compute_p_stop(
+            m_cf_exp, c_ret_at_trans, mask_at_trans, hp.epsilon_d, xp,
+        )
+        log_trans = xp.log(xp.maximum(p_stop_trans, 1e-300))
+
+        # Final stop on phase-2's terminal c_ret + mask.
+        p_stop_final = compute_p_stop(
+            m_cf_exp, c_ret_final, mask_final, hp.epsilon_d, xp,
+        )
+        log_final = xp.log(xp.maximum(p_stop_final, 1e-300))
+
+        return phase1_ll + log_trans + cum_final + log_final
+
+    Ts = xp.arange(R_total + 1, dtype=xp.int32)
+    return jax.vmap(phase2_for_T)(Ts)
+
+
+# --- numpy entry point ---------------------------------------------------
 
 
 def compute_list_log_likelihood_numpy(
     params,
-    cat_indices,
     recall_sps,
     recall_mask,
     W: int,
-    K: int,
 ) -> float:
     """Numpy-dtype entry point (Tier-1 and oracle use this)."""
     import numpy as np
@@ -570,9 +657,85 @@ def compute_list_log_likelihood_numpy(
     hp = CoreHyperparams.from_model_parameters(params)
     ll = compute_list_log_likelihood(
         hp,
-        np.asarray(cat_indices, dtype=np.int64),
-        np.asarray(recall_sps, dtype=np.int64),
-        np.asarray(recall_mask, dtype=bool),
-        W=W, K=K, xp=np, dtype=np.float64,
+        W=W,
+        recall_sps=np.asarray(recall_sps, dtype=np.int64),
+        recall_mask=np.asarray(recall_mask, dtype=bool),
+        xp=np, dtype=np.float64,
     )
     return float(ll)
+
+
+# --- simulator (sample recalls from the generative model) ----------------
+
+
+def simulate_recalls(
+    params,
+    W: int,
+    rng,  # numpy random.Generator
+    *,
+    max_recalls: int | None = None,
+) -> list[int]:
+    """Sample a recall sequence from the C&Z hierarchical model (FR mode).
+
+    Implements the forward generative process literally:
+
+        phase = 1
+        c_ret = c_item_traj[W]   (end-of-list cue)
+        while not terminated:
+            compute a = M^CF_exp · c_ret; mask already_recalled
+            compute p_stop via Eq 7
+            if rng < p_stop:
+                if phase == 1:
+                    c_ret = e_start   (reinstate to beginning-of-list)
+                    phase = 2
+                    continue
+                else:
+                    break   (terminate)
+            # else draw a recall
+            i ~ Categorical(softmax(k · a_masked))
+            record i; already_recalled.add(i)
+            c_ret <- drift(c_ret, β_rec, c^IN_rec(i))
+
+    Returns the list of 1-based serial positions produced.
+    """
+    import numpy as np
+
+    hp = CoreHyperparams.from_model_parameters(params)
+    d = W + 1
+
+    c_item_traj, m_fc_exp, m_cf_exp = run_encoding(hp, W, np, np.float64)
+
+    c_ret = c_item_traj[W].copy()
+    phase = 1
+    already_mask = np.zeros(W, dtype=bool)
+    recalls: list[int] = []
+    cap = max_recalls if max_recalls is not None else 3 * W
+
+    while len(recalls) < cap:
+        p_stop = float(compute_p_stop(m_cf_exp, c_ret, already_mask, hp.epsilon_d, np))
+        if rng.random() < p_stop:
+            if phase == 1:
+                c_ret = np.zeros(d, dtype=np.float64)
+                c_ret[0] = 1.0  # e_start
+                phase = 2
+                continue
+            else:
+                break
+        a = activation(m_cf_exp, c_ret, np)
+        log_p = log_softmax_masked(hp.k * a, ~already_mask, np)
+        p = np.exp(log_p - log_p.max())
+        p = p / p.sum()
+        # Mask: anything already recalled should have been driven to ~0 by
+        # the softmax mask; re-zero defensively.
+        p = np.where(already_mask, 0.0, p)
+        p_sum = p.sum()
+        if p_sum <= 0:
+            break
+        p = p / p_sum
+        idx = int(rng.choice(W, p=p))
+        recalls.append(idx + 1)  # 1-based SP
+        already_mask[idx] = True
+        c_IN = c_IN_rec_of(idx, m_fc_exp, hp.gamma_fc, d, np, np.float64)
+        c_ret = drift_c_ret(c_ret, c_IN, hp.beta_rec, np)
+
+    return recalls

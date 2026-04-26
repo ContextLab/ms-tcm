@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0.0",
+  "dataset_name": "kahana2002_exp1_young",
+  "design": {
+    "participants": 31,
+    "lists_per_participant": 30,
+    "words_per_list": 10,
+    "unique_categories_per_list": 1,
+    "unique_categories_total": 1
+  },
+  "source": {
+    "paper": "Kahana, Howard, Zaromb, Wingfield (2002) JEP:LMC 28(3), 530-540",
+    "url": "https://memory.psych.upenn.edu/Data_Archive",
+    "condition": "Experiment 1, young adults (immediate free recall)"
+  },
+  "preprocessing": "Dropped first 3 practice lists per participant (C&Z 2025 convention). Intrusions (-99 not-presented, prior-list, extra-list) mapped to serial_position=0.",
+  "row_counts": {
+    "presented": 9160,
+    "recalled_total": 5611,
+    "recalled_in_list": 5113,
+    "recalled_extra_list_intrusions": 498
+  }
+}
