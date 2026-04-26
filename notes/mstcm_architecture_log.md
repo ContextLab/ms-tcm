@@ -545,6 +545,85 @@ split as a session-effect dimension.
 
 ---
 
+## Iteration 2 fit results (2026-04-26)
+
+The consolidated MS-TCM (strict-hierarchical) was fit to FRFR-category
+on the 480-list dataset with 3 restarts, finding:
+
+```
+LL = -10773.54  (worse than pre-consolidation MS-TCM = -10502.16,
+                 worse than C&Z baseline = -10699.82)
+beta_enc = 0.866
+beta_enc_global = 0.695
+beta_list = 0.195
+gamma_fc = 0.747
+k = 2.56
+beta_rec = 0.948
+epsilon_d = 1.92
+beta_rein = 0.311
+lambda_reinstate = 0.468
+tau_init = 0.379
+```
+
+τ and λ are both substantial (mechanisms are firing), but the model's
+overall LL is WORSE than both the C&Z baseline and the pre-consolidation
+MS-TCM — by ~74 nats vs C&Z and ~271 nats vs pre-consolidation.
+
+**Diagnosis**: the strict-hierarchical architecture is TOO restrictive
+for FRFR-category. Specifically:
+
+1. **Per-storyline associative matrices over-partition the model**.
+   Under strict separation, when route β fires for storyline ŝ, only
+   M^CF_s can produce activations — items in OTHER storylines get
+   zero activation regardless of how the retrieval context might cue
+   them. The pre-consolidation MS-TCM allowed within-storyline retrieval
+   to also activate items from other storylines via the shared M^CF_G,
+   so the model could occasionally cross category boundaries
+   mid-recall (which the data show participants doing — within-cat
+   transitions are 57% in early lists, 38% in late, NOT 100%).
+
+2. **The visit boundary structure is rigid**. Under route β, the
+   only way the observed cross-category transitions can occur is via
+   storyline-stop → storyline-selection → new-storyline-start, with
+   the immediately-preceding-only exclusion. This makes the model
+   brittle: it has to pay log-likelihood cost for every cross-category
+   transition, which adds up over a recall sequence with several
+   transitions.
+
+3. **Behavioral test failures from the figure**: pFR primacy spike at
+   sp=1 (observed ~0.27) is still under-predicted (~0.05). SPC scallops
+   are smoothed out. This is consistent with the model getting
+   storyline-selection probabilities wrong: end-of-encoding global
+   context overlaps most with the LAST-encoded storyline, so storyline-
+   selection softmax favors the most-recent storyline, not the first.
+
+**What this suggests for Iteration 3**:
+
+- Relax the strict separation: allow within-storyline retrieval to
+  fall back to global M^CF_G after a within-storyline stopping rule
+  fires, BEFORE the strict-hierarchy fallback to global storyline
+  selection. (Effectively: a "soft" storyline boundary instead of
+  a "hard" one.)
+- OR: revisit OQ1 — let route α use a composite (M^CF_G + Σ_s M^CF_s)
+  rather than M^CF_G alone, so route α has access to the per-storyline
+  associations during pure-global recall.
+- OR: revisit OQ3 — try option (iii) c_ret_s = M^lists_G[ŝ] (cached
+  storyline list-context) instead of e_start. This might make
+  within-storyline retrieval less primacy-dominated and more flexible.
+- The τ=0.38 fit shows route β fires in ~38% of trials — but the
+  β-route's structural cost might dominate the LL whenever it fires
+  on an "active" recall sequence. Diagnostic: compute the per-list
+  LL contribution under route α only vs route β only — see which
+  route is bringing down the LL.
+
+**Empirical anchor for Iteration 3 design**: the data show participants
+make BOTH within-storyline AND across-storyline transitions during
+recall, with within-storyline at 57% / 38% (early/late). The model
+needs to capture this mixture WITHIN a recall flow, not just at
+visit boundaries.
+
+---
+
 ## Iteration N (placeholder)
 
 When we propose further changes, append a new `## Iteration N`

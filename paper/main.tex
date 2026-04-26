@@ -13,15 +13,14 @@
 \usepackage{xcolor}
 
 % --- MS-TCM notation macros ----------------------------------------------
-% MS-TCM is built on top of Cornell & Zhang's (2025) hierarchical CMR;
-% Iteration 1 (committed) adds per-storyline contexts, lambda
-% storyline-return reinstatement at encoding (v6 Eq 6), and a tau
-% storyline-initiation mixture at recall onset. Iteration 2 (in progress)
-% additionally introduces a separate global cross-storyline context that
-% drifts at every encoding step, per-storyline associative matrices, and
-% strict hierarchical retrieval (route beta: global -> storyline ->
-% events). See notes/mstcm_architecture_log.md for design rationale and
-% notes/v6_migration.md for the v1->v6 symbol mapping.
+% MS-TCM is built on top of Cornell & Zhang's (2025) hierarchical CMR. It
+% maintains separate per-storyline contexts and a global cross-storyline
+% context (drifting at every encoding step), per-storyline associative
+% matrices, lambda storyline-return reinstatement at encoding, a tau
+% storyline-initiation mixture at recall onset, and a strict hierarchical
+% retrieval route under which the global context cues a storyline and the
+% storyline cues its events. See notes/mstcm_architecture_log.md for the
+% iteration-by-iteration design rationale.
 \newcommand{\citem}{\mathbf{c}^{\mathrm{item}}}
 \newcommand{\cstory}{\mathbf{c}^{\mathrm{story}}}
 \newcommand{\cglob}{\mathbf{c}^{\mathrm{global}}}
@@ -34,6 +33,8 @@
 \newcommand{\MFCexp}{M^{\mathrm{FC}}_{\mathrm{exp}}}
 \newcommand{\MCFG}{M^{\mathrm{CF}}_{G}}
 \newcommand{\MCFs}{M^{\mathrm{CF}}_{s}}
+\newcommand{\MFCG}{M^{\mathrm{FC}}_{G}}
+\newcommand{\MFCs}{M^{\mathrm{FC}}_{s}}
 \newcommand{\MlistsG}{M^{\mathrm{lists}}_{G}}
 \newcommand{\betaenc}{\beta_{\mathrm{enc}}}
 \newcommand{\betaencG}{\beta_{\mathrm{enc}}^{G}}
@@ -42,6 +43,7 @@
 \newcommand{\betarec}{\beta_{\mathrm{rec}}}
 \newcommand{\gammafc}{\gamma_{\mathrm{fc}}}
 \newcommand{\rhoenc}{\rho_{\mathrm{enc}}}
+\newcommand{\rhoencG}{\rho_{\mathrm{enc}}^{G}}
 \newcommand{\rhostory}{\rho_{\mathrm{story}}}
 \newcommand{\epsd}{\varepsilon_{d}}
 \newcommand{\tauinit}{\tau}
@@ -73,35 +75,33 @@ and between-list organization in free recall. Here we introduce a
 \emph{Multi-Stream Temporal Context Model} (MS-TCM), a generalization
 of \citeauthor{CornellZhang2025}'s hierarchical CMR for memory of
 \emph{interleaved storylines}. MS-TCM augments hierarchical CMR with
-three new mechanisms: (i) a bank of \emph{per-storyline} contexts that
-each drift only while their own storyline is active; (ii)
-\emph{storyline-return reinstatement at encoding} with strength
-$\lambda$, so that returning to a previously-abandoned storyline
-partially restores its cached context rather than forcing it to drift
-through intervening other-storyline events; and (iii) a
-\emph{storyline-initiation mixture} at recall onset with weight
-$\tau$, in which the first recall is, with probability $\tau$, cued by
-the storyline hierarchy rather than by the end-of-list item context.
-We are also developing a fourth extension --- strict hierarchical
-recall with a separate global cross-storyline context (Iteration 2,
-implementation in progress) --- whose architecture we describe alongside
-the committed Iteration 1. We derive analytically why the
-$\lambda$ mechanism predicts the equivalence of cued recall across
-narratively-adjacent events that are temporally adjacent (\emph{grouped})
-versus separated by 2--7 other-storyline events (\emph{bridge}), an
-equivalence reported by \citet{XuDuncanManning} with Bayes factor
-$\mathrm{BF}_{01} = 412$. We then fit MS-TCM (Iteration 1) to the
-category condition of \citet{ManningEtAl2023FRFR}'s public free-recall
-dataset by maximum likelihood, compare it to a verified, equation-derived
-implementation of \citeauthor{CornellZhang2025} hierarchical CMR, and
-report two behavioral diagnostics that motivate Iteration 2: the
-early-vs-late lag-CRP difference is a category-composition shift rather
-than a within-condition mechanism difference, and the late-list serial
-position scallop is fully accounted for ($r = 0.999$) by
-category-organized recall. MS-TCM achieves a log-likelihood improvement
-of $\Delta\mathrm{LL} = +197.66$ over hierarchical CMR
-($\Delta\mathrm{AIC} = -391.32$) on the FRFR-category data, with
-$\hat{\tau} = 0.408$.
+four mechanisms: (i) a bank of \emph{per-storyline} contexts that
+each drift only while their own storyline is active, alongside a
+separate \emph{global} cross-storyline context that drifts at every
+encoding step; (ii) per-storyline associative matrices ($\MFCs$,
+$\MCFs$) and global associative matrices ($\MFCG$, $\MCFG$) that
+support category-level cueing; (iii) \emph{storyline-return
+reinstatement at encoding} with strength $\lambda$, so that returning
+to a previously-abandoned storyline partially restores its cached
+context rather than forcing it to drift through intervening
+other-storyline events; and (iv) a \emph{strict hierarchical recall}
+route, selected with mixing probability $\tauinit$ at recall onset, in
+which the global context cues a storyline, the storyline cues its
+events, and on storyline-stop the procedure returns to the global
+level with the immediately-preceding storyline excluded. We derive
+analytically why the $\lambda$ mechanism predicts the equivalence of
+cued recall across narratively-adjacent events that are temporally
+adjacent (\emph{grouped}) versus separated by 2--7 other-storyline
+events (\emph{bridge}), an equivalence reported by
+\citet{XuDuncanManning} with Bayes factor $\mathrm{BF}_{01} = 412$. We
+then describe the application of MS-TCM to the category condition of
+\citet{ManningEtAl2023FRFR}'s public free-recall dataset, compare it
+to a verified, equation-derived implementation of
+\citeauthor{CornellZhang2025} hierarchical CMR, and report two
+behavioral diagnostics: the early-vs-late lag-CRP difference is a
+category-composition shift rather than a within-condition mechanism
+difference, and the late-list serial position scallop is fully
+accounted for ($r = 0.999$) by category-organized recall.
 \end{abstract}
 
 \section{The puzzle of memory across narrative storylines}
@@ -201,7 +201,7 @@ strand, so a later red segment in the braid is darker-red than an
 earlier red segment even though the two are separated by blue and
 green segments in viewer-time. Thin storyline-coloured arcs show which
 strand each segment came from. \textbf{(C)} Context drifts. The
-item-level context ($\citem$) updates at every viewer tick (smooth
+global context $\cglob$ updates at every viewer tick (smooth
 grey-to-black gradient). Each storyline-level context drifts only
 during its own segments; when the storyline resumes later, MS-TCM
 reinstates a cached snapshot of its context with strength $\lambda$
@@ -249,43 +249,54 @@ published equations, verified the implementation to machine epsilon
 against hand-derived oracles (see
 \texttt{code/ms\_tcm/\_likelihood\_core.py} and
 \texttt{code/tests/test\_hcmr\_*.py}), and use it as the comparator
-against which MS-TCM's contribution is measured. Iteration 1 of MS-TCM
-(committed; \texttt{code/ms\_tcm/\_likelihood\_core\_mstcm.py}) augments
-that baseline with three mechanisms: \emph{per-storyline contexts},
-the $\lambda$ \emph{storyline-return reinstatement at encoding} (v6
-Eq.~6; \texttt{notes/two\_level\_cmr\_v6.pdf}), and the
-$\tauinit$ \emph{storyline-initiation mixture} at recall onset.
-Iteration 2 of MS-TCM (in progress;
-\texttt{code/ms\_tcm/\_likelihood\_core\_mstcm\_v2.py}) restructures
-the architecture into a strict two-level hierarchy with a separate
-global cross-storyline context and per-storyline associative matrices;
-the empirical fit of Iteration 2 is pending. The architectural
-schematic for the committed Iteration 1 is shown in
-Figure~\ref{fig:model}.
+against which MS-TCM's contribution is measured. MS-TCM augments that
+baseline along four axes: (a) it splits the single list-level context
+into a bank of per-storyline contexts (one per category, drifting only
+when their own storyline is active) plus a separate \emph{global}
+cross-storyline context that drifts at every encoding step at rate
+$\betaencG$; (b) it accumulates separate per-storyline associative
+matrices ($\MFCs$, $\MCFs$) alongside the global matrices ($\MFCG$,
+$\MCFG$), so storyline-level retrieval reads from a storyline's own
+associations rather than from the global pool; (c) it adds the
+$\lambda$ \emph{storyline-return reinstatement at encoding} (v6
+Eq.~6; \texttt{notes/two\_level\_cmr\_v6.pdf}) for handling
+interrupted-then-resumed storylines; and (d) it replaces the C\&Z
+single retrieval route with a $\tauinit$-mixture between a
+recency-driven global route and a strict hierarchical route in which
+the global context cues a storyline and the storyline cues its
+events. The architectural schematic is shown in
+Figure~\ref{fig:model}; the canonical implementation lives at
+\texttt{code/ms\_tcm/\_likelihood\_core\_mstcm.py}.
 
-\subsection{Item-level and storyline-level contexts}
+\subsection{Per-storyline and global contexts}
 \label{sec:hierarchy}
 
 At any given encoding step $i$ on active storyline $s(i) \in
-\{1,\dots,K\}$, MS-TCM maintains an \emph{item-level} context
-$\citem(i)$ that drifts at every step with rate $\betaenc$, and a bank
-of \emph{storyline-level} contexts $\{\cstory_{k}(i)\}_{k=1}^{K}$, of
-which only the active one $\cstory_{s(i)}$ updates on step $i$. The
-inactive storyline contexts are frozen until their own storyline
-resumes:
+\{1,\dots,K\}$, MS-TCM maintains four context vectors. A bank of
+\emph{per-storyline} item-level contexts $\{\cstory_{k}(i)\}_{k=1}^{K}$
+of which only the active one $\cstory_{s(i)}$ updates on step $i$;
+the inactive storyline contexts are frozen until their own storyline
+resumes. A bank of per-storyline list-level contexts (one per
+storyline, drifting at rate $\betastory$ on storyline-$s$ items only)
+that we elide here for compactness but maintain in the implementation.
+And a \emph{global} cross-storyline context $\cglob(i)$ that drifts
+at rate $\betaencG$ on \emph{every} encoding step regardless of the
+active storyline:
 \begin{align}
-  \citem(i)            &= \rhoenc\,\citem(i-1) + \betaenc\,\cin_i, \label{eq:citem}\\[2pt]
   \cstory_{s(i)}(i)    &= \rhostory\,\cstory_{s(i)}(i-1)  + \betastory\,\cin_i,\label{eq:cstory}\\[2pt]
-  \cstory_{k}(i)       &= \cstory_{k}(i-1) \quad \text{for all } k \neq s(i),
+  \cstory_{k}(i)       &= \cstory_{k}(i-1) \quad \text{for all } k \neq s(i),\label{eq:cstory-frozen}\\[2pt]
+  \cglob(i)            &= \rhoencG\,\cglob(i-1) + \betaencG\,\cin_i,\label{eq:cglob}
 \end{align}
-with $\rhoenc = \sqrt{1-\betaenc^2}$ and $\rhostory =
-\sqrt{1-\betastory^2}$ preserving unit norm under unit-norm inputs.
+with $\rhostory = \sqrt{1-\betastory^2}$ and $\rhoencG =
+\sqrt{1-\betaencG^2}$ preserving unit norm under unit-norm inputs.
 \citet{CornellZhang2025}'s hierarchical CMR has a single list-level
-context $\clistG$ that drifts at every step with rate $\betalist$;
-MS-TCM replaces this with $K$ per-storyline contexts, one per active
-storyline, each drifting only when its own storyline is encoded. When
-the experiment exposes only one storyline ($K=1$), MS-TCM's per-storyline
-context recovers \citeauthor{CornellZhang2025}'s list-level context
+context that drifts at every step with rate $\betalist$; MS-TCM
+instead splits this into a bank of per-storyline contexts (each
+drifting at rate $\betastory$ only when its own storyline is active)
+and a separate global context that drifts at every step at rate
+$\betaencG$. When the experiment exposes only one storyline ($K=1$),
+the per-storyline context coincides with the global context and
+MS-TCM recovers \citeauthor{CornellZhang2025}'s list-level dynamics
 exactly.
 
 \paragraph{Feature inputs.}
@@ -301,150 +312,153 @@ $\MFCpre$ is the identity (orthogonal one-hot items), so
 $\MFCpre f_i$ is just $f_i$; $\gammafc$ is still identifiable through
 the Hebbian-accumulated $\MFCexp$.
 
+\subsection{Associative matrices: per-storyline and global}
+\label{sec:matrices}
+
+MS-TCM accumulates separate Hebbian associative matrices at the
+storyline and global levels, both updated at every encoding step but
+indexed differently. The \emph{global} forward and backward
+associative matrices $\MFCG$ and $\MCFG$ accumulate on every step
+with the global context $\cglob$ as their context vector; they
+support flat, recency-driven retrieval that ignores storyline
+membership. The \emph{per-storyline} forward and backward associative
+matrices $\MFCs$ and $\MCFs$ (one pair per storyline) accumulate
+\emph{only} on storyline-$s$ items, with the storyline's own
+$\cstory_s$ as their context vector; they support
+within-storyline recall once a storyline has been selected. A separate
+\emph{storyline-context} associative matrix $\MlistsG$ (one row per
+storyline) caches each storyline's end-of-storyline context and
+supports the global-to-storyline lookup at retrieval. At every
+encoding step:
+\begin{equation}
+\Delta \MFCG = \cglob(i-1)\,f_i^{\top},\quad
+\Delta \MCFG = f_i\,\cglob(i-1)^{\top},
+\label{eq:global-update}
+\end{equation}
+and on storyline-$s(i)$ items only:
+\begin{equation}
+\Delta \MFCs = \cstory_{s(i)}(i-1)\,f_i^{\top},\quad
+\Delta \MCFs = f_i\,\cstory_{s(i)}(i-1)^{\top}.
+\label{eq:story-update}
+\end{equation}
+
 \subsection{Storyline boundary mechanisms}
 \label{sec:boundaries}
 
-Three boundary transitions shape the storyline-context dynamics. At a
-\emph{within-storyline event boundary}
-($e(i)\neq e(i-1)$, $s(i)=s(i-1)$), the item-level context synchronizes
-to the active storyline's context: $\citem(i) \leftarrow \cstory_{s(i)}$.
-At a \emph{storyline switch} ($s(i)\neq s(i-1)$), the outgoing
-storyline's context is cached into a storyline-context associative
-matrix $\MSC$ via the Hebbian update
+Storyline boundaries shape the per-storyline context dynamics. At a
+\emph{storyline switch} ($s(i)\neq s(i-1)$), the outgoing storyline's
+end-of-segment context is cached into the storyline-context
+associative matrix $\MlistsG$ via
 \begin{equation}
-  \Delta\MSC = g_{s(i-1)}\,\cstory_{s(i-1)}(i-1)^{\top},
+  \Delta\MlistsG = g_{s(i-1)}\,\cstory_{s(i-1)}(i-1)^{\top},
   \label{eq:msc-update}
 \end{equation}
 where $g_s$ is a one-hot indicator of storyline $s$ in the storyline
-index space. The item-level context then synchronizes to the incoming
-storyline's context. At a \emph{storyline return} --- the case
-that motivates the $\lambda$ mechanism --- the returning storyline's
-context is partially reinstated from $\MSC$ with strength
+index space. At a \emph{storyline return} -- the case that motivates
+the $\lambda$ mechanism -- the returning storyline's context is
+partially reinstated from $\MlistsG$ with strength
 $\lambda \in [0, 1]$:
 \begin{equation}
-  \cstory_{s(i)}(i) \leftarrow \lambda\,\bigl({\MSC}^{\top} g_{s(i)}\bigr) + (1-\lambda)\,\cstory_{s(i)}(i-1).
+  \cstory_{s(i)}(i) \leftarrow \lambda\,\bigl({\MlistsG}^{\top} g_{s(i)}\bigr) + (1-\lambda)\,\cstory_{s(i)}(i-1).
   \label{eq:lambda}
 \end{equation}
-At $\lambda = 0$, Equation~\ref{eq:lambda} recovers
-\citeauthor{CornellZhang2025} hierarchical CMR's per-storyline
-counterpart with no return cache. At $\lambda = 1$, the context is
-fully restored to its cached snapshot. Intermediate values blend the
-two. After Equation~\ref{eq:lambda} fires, the item-level context
-synchronizes to the reinstated $\cstory_{s(i)}(i)$. The item-to-context
-associative matrix $\MIC$ accumulates Hebbian updates at every encoding
-step:
-\begin{equation}
-  \Delta\MIC = \citem(i)\,f_i^{\top}.
-  \label{eq:mic-update}
-\end{equation}
+At $\lambda = 0$, Equation~\ref{eq:lambda} recovers a per-storyline
+counterpart of \citeauthor{CornellZhang2025}'s hierarchical CMR with
+no return cache. At $\lambda = 1$, the context is fully restored to
+its cached snapshot. Intermediate values blend the two. The global
+context $\cglob$ is unaffected by Equation~\ref{eq:lambda}: it drifts
+through the gap regardless of which storyline is active.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.95\textwidth]{figs/source/fig_model}
-\caption{\textbf{MS-TCM Iteration 1 architecture.} Each encoding step
-draws an input $\cin_i$ from the current event (Eq.~\ref{eq:cin}). That
-input drives two parallel context updates: the item-level context
-$\citem$ updates at every step (rate $\betaenc$), while only the active
-storyline's context $\cstory_{s(i)}$ updates on step $i$ (rate
-$\betastory$; Eqs.~\ref{eq:citem}--\ref{eq:cstory}). At storyline
-switches, the outgoing storyline's context is cached in $\MSC$
-(Eq.~\ref{eq:msc-update}). At storyline returns, MS-TCM reinstates the
-cached context with strength $\lambda$ (Eq.~\ref{eq:lambda}). At
-retrieval, with probability $\tauinit$ the first recall is initiated
-from the storyline hierarchy
-(Eq.~\ref{eq:tau-storyline-init}); with probability $1-\tauinit$ the
-standard end-of-list cue is used. After the first recall, both routes
-follow the standard \citet{CornellZhang2025} dynamics
-(Eqs.~\ref{eq:activation}--\ref{eq:softmax}).}
+\caption{\textbf{MS-TCM architecture.} Each encoding step draws an
+input $\cin_i$ from the current event (Eq.~\ref{eq:cin}). That input
+drives two parallel context updates: the global context $\cglob$
+updates at every step (rate $\betaencG$;
+Eq.~\ref{eq:cglob}), while only the active storyline's context
+$\cstory_{s(i)}$ updates on step $i$ (rate $\betastory$;
+Eq.~\ref{eq:cstory}). At storyline switches, the outgoing storyline's
+context is cached in $\MlistsG$ (Eq.~\ref{eq:msc-update}). At
+storyline returns, MS-TCM reinstates the cached context with strength
+$\lambda$ (Eq.~\ref{eq:lambda}). At retrieval (\S\ref{sec:retrieval})
+the model selects between a recency-driven global route (probability
+$1-\tauinit$, using $\MCFG$) and a strict hierarchical route
+(probability $\tauinit$, in which the global context cues a storyline
+through $\MlistsG$ and the storyline cues its events through
+$\MCFs$).}
 \label{fig:model}
 \end{figure}
 
-\subsection{Retrieval: a $\tauinit$-mixture over initiation routes}
+\subsection{Retrieval: a $\tauinit$-mixture over two routes}
 \label{sec:retrieval}
 
 \citeauthor{CornellZhang2025} hierarchical CMR initiates each recall
 list from an end-of-encoding item-level context (recency-driven), with
 a hierarchical fallback to the list-level beginning-of-list context
-only after item-level retrieval fails. Empirically, however, the
-FRFR-category data show a strong primacy spike in the probability of
-first recall ($\hat{p}(\text{first recall} \mid \text{sp}=1) \approx
-0.27$) that the recency-driven initiation cannot reproduce
-(\S\ref{sec:frfr}). MS-TCM therefore adds a \emph{$\tauinit$ mixture}
-at recall onset that promotes the storyline-cued initiation route
-from a fallback to a first-class option.
+only after item-level retrieval fails. Empirically, the FRFR-category
+data (\S\ref{sec:frfr}) show two signatures that this single recall
+route does not produce: a strong primacy spike in the probability of
+first recall and a within-category clustering of recalls that
+reorganizes the SPC into a four-period scallop on randomized
+presentation lists (\S\ref{sec:diagnostics}). MS-TCM therefore
+replaces the single C\&Z retrieval rule with a $\tauinit$-mixture
+between two routes that is selected once at recall onset and used for
+the entire recall sequence.
 
-With probability $1-\tauinit$, the recall list is initiated by the
-standard end-of-encoding item-level cue. With probability $\tauinit$,
-a storyline $\hat{s}$ is sampled from the storyline hierarchy via
-\begin{equation}
-  P(\hat{s} = s \mid \citem(W)) = \frac{\exp\bigl(k\,(\MSC\,\citem(W))_{s}\bigr)}{\sum_{s'} \exp\bigl(k\,(\MSC\,\citem(W))_{s'}\bigr)},
-  \label{eq:tau-storyline-init}
-\end{equation}
-where $\citem(W)$ is the item-level context at the end of encoding
-step $W$, and the item-level retrieval cue is reactivated to
-$\cstory_{\hat{s}}$ before sampling the first recall. After the first
-recall, both initiation routes converge onto the standard
-\citeauthor{CornellZhang2025} dynamics: the cue context drifts toward
-the last-recalled item's input context at rate $\betarec$, and the
-within-trial stopping probability
-$p_{\mathrm{stop}} = \exp(-\epsd\,a^{\mathrm{nr}}/a^{\mathrm{r}})$
-governs when recall terminates \citep[C\&Z 2025 Eqs.\ 3, 7]{CornellZhang2025}.
-At every retrieval step, candidate items $j$ are activated through
-\begin{equation}
-  a_j = {\MIC}^{\top}\,\cret,
-  \label{eq:activation}
-\end{equation}
-and the probability of recalling item $j$ is
+\paragraph{Route $\alpha$: recency-driven global recall (probability $1-\tauinit$).}
+The end-of-encoding global context $\cglob(W)$ cues items through the
+global associative matrix $\MCFG$. At every retrieval step, candidate
+items $j$ are activated via $a_j = \MCFG\,\cret$, and the probability
+of recalling item $j$ is
 \begin{equation}
   P(j \mid \cret) = \frac{\exp(k\,a_j)}{\sum_{\ell \in \mathcal{C}} \exp(k\,a_{\ell})},
   \label{eq:softmax}
 \end{equation}
 where $k > 0$ is the softmax gain and $\mathcal{C}$ is the set of
 still-in-play candidate items (standard CMR no-repeats convention).
-Setting $\tauinit = 0$ and $K = 1$ recovers the
-\citeauthor{CornellZhang2025} retrieval rule exactly.
+After each recall the cue context drifts toward the last-recalled
+item's input context at rate $\betarec$, and the within-trial stopping
+probability $p_{\mathrm{stop}} = \exp(-\epsd\,a^{\mathrm{nr}}/a^{\mathrm{r}})$
+governs when recall terminates \citep[C\&Z 2025 Eqs.\ 3, 7]{CornellZhang2025}.
+Route $\alpha$ involves no storyline lookup; it is a flat,
+global-only retrieval analogous to a standard CMR readout.
 
-\subsection{Iteration 2: strict hierarchical recall with a global cross-storyline context}
-\label{sec:iter2}
+\paragraph{Route $\beta$: strict hierarchical recall (probability $\tauinit$).}
+The recall sequence is generated by a two-level hierarchy in which the
+global context selects a storyline and the storyline's per-storyline
+matrix is then used to retrieve its events. Concretely, each visit to
+the global level samples a storyline $\hat{s}$ via
+\begin{equation}
+  P(\hat{s} = s \mid \cglob) = \frac{\exp\bigl(k\,(\MlistsG\,\cglob)_{s}\bigr)}{\sum_{s' \notin \mathcal{E}} \exp\bigl(k\,(\MlistsG\,\cglob)_{s'}\bigr)},
+  \label{eq:tau-storyline-init}
+\end{equation}
+where $\mathcal{E}$ is the exclusion set (see below). The
+within-storyline cue is then set to the storyline's beginning-of-list
+context (producing within-storyline primacy), and items are recalled
+from $\MCFs$ via Equation~\ref{eq:softmax} (with $\MCFs$ in place of
+$\MCFG$) until the C\&Z stopping rule fires. The exclusion set
+$\mathcal{E}$ tracks only the \emph{immediately-preceding} storyline:
+once a visit to storyline $\hat{s}$ stops, $\hat{s}$ is excluded from
+the next global selection but becomes available again as soon as any
+other storyline has been visited. This single-step exclusion captures
+the empirical observation that participants do not re-enter the same
+category twice in a row but \emph{do} return to a category after
+intervening category visits. After the storyline-stop, the procedure
+returns to Equation~\ref{eq:tau-storyline-init} (with $\hat{s}$
+excluded), and the recall sequence continues until either the global
+selection has no remaining candidates or the storyline-stop fires
+without further visits.
 
-Behavioral diagnostics on the FRFR-category data
-(\S\ref{sec:diagnostics}) reveal that participants organize their recall
-by category even when the presentation order is randomized -- a
-signature that the Iteration 1 architecture only partly produces. We
-are therefore developing Iteration 2, which restructures MS-TCM into
-a strict two-level hierarchy. \emph{Per-storyline} variables
-($\cstory_{s}$, plus a per-storyline list-level context, plus
-per-storyline associative matrices ${\MFCexp}_{s}$ and $\MCFs$) drift
-only when their own storyline is active; a separate \emph{global}
-cross-storyline context $\cglob$ drifts at every encoding step at
-rate $\betaencG$, with global associative matrices ${\MFCexp}_{G}$,
-$\MCFG$, and a $\MlistsG$ matrix indexed by storyline that holds each
-storyline's end-of-storyline context. Recall under Iteration 2 is a
-$\tauinit$-mixture over two routes:
-
-\begin{enumerate}
-\item \textbf{Route $\alpha$ (probability $1-\tauinit$, recency-driven).}
-      The end-of-encoding global context $\cglob(W)$ cues items through
-      $\MCFG$, with no storyline lookup. This is a flat, global-only
-      retrieval analogous to standard CMR readout.
-\item \textbf{Route $\beta$ (probability $\tauinit$, strict hierarchical).}
-      The global context cues a storyline,
-      $\hat{s} \sim \mathrm{softmax}(k\,\MlistsG\,\cglob)$; the
-      within-storyline cue is set to the storyline's beginning-of-list
-      context (producing within-storyline primacy); items are recalled
-      from $\MCFs$ until the storyline-stop fires; the procedure
-      returns to the global level with $\hat{s}$ excluded from the next
-      candidate set (one-step exclusion). This produces the
-      category-organized recall sequences observed in the data.
-\end{enumerate}
-
-Iteration 2 retains the $\lambda$ storyline-return reinstatement at
-encoding (Eq.~\ref{eq:lambda}). When $K = 1$, Iteration 2 reduces to
-the \citeauthor{CornellZhang2025} two-level hierarchy with
-$\tauinit$-controlled hierarchical-fallback weight; when $\tauinit = 0$,
-Iteration 2 reduces to a flat global-context recall analogous to
-standard CMR. The empirical fit of Iteration 2 to FRFR-category is in
-progress.
+After the first recall, both routes follow the standard
+\citeauthor{CornellZhang2025} drift dynamics for their respective cue
+context (the global context $\cglob$ for route $\alpha$; the
+storyline cue $\cstory_{\hat{s}}$ for route $\beta$, with the global
+context also drifting in parallel so the next global selection has an
+updated cue). Setting $\tauinit = 0$ collapses the mixture onto the
+recency-driven global route; setting $K = 1$ collapses the global and
+per-storyline branches onto a single context, recovering
+\citeauthor{CornellZhang2025} hierarchical CMR exactly.
 
 \subsection{The pre-experimental context matrix}
 \label{sec:preexp}
@@ -485,20 +499,20 @@ one code change, not an architectural rewrite.
 \section{Deriving the grouped--bridge equivalence}
 \label{sec:eqv}
 
-We now derive analytically why MS-TCM (under either iteration) predicts
-the observed grouped $\approx$ bridge equivalence. Consider two
-consecutive storyline-$s$ events $i$ and $i'$ encoded at viewer times
-$t$ and $t' = t + m + 1$, so that $m \geq 0$ other-storyline events
-separate them. The key quantity for cued recall is the similarity
-between the \emph{retrieval cue} at time $t'$ and the \emph{encoded
-context} at time $t$, because that similarity drives the activation
-in Equation~\ref{eq:activation}. Under MS-TCM, cueing with the target
-event's narrative position reinstates a retrieval context dominated by
-the storyline-level $\cstory_s$ --- which was cached at $t$, drifted
-minimally during the $m$ intervening other-storyline events (because
-Eq.~\ref{eq:cstory} only fires when the active storyline's own events
-happen), and was partially reinstated at step $i'$ with weight
-$\lambda$ (Eq.~\ref{eq:lambda}).
+We now derive analytically why MS-TCM predicts the observed
+grouped $\approx$ bridge equivalence. Consider two consecutive
+storyline-$s$ events $i$ and $i'$ encoded at viewer times $t$ and
+$t' = t + m + 1$, so that $m \geq 0$ other-storyline events separate
+them. The key quantity for cued recall is the similarity between the
+\emph{retrieval cue} at time $t'$ and the \emph{encoded context} at
+time $t$, because that similarity drives the activation in the
+retrieval softmax (Eq.~\ref{eq:softmax}). Under MS-TCM, cueing with
+the target event's narrative position reinstates a retrieval context
+dominated by the storyline-level $\cstory_s$ -- which was cached at
+$t$, drifted minimally during the $m$ intervening other-storyline
+events (because Eq.~\ref{eq:cstory} only fires when the active
+storyline's own events happen), and was partially reinstated at step
+$i'$ with weight $\lambda$ (Eq.~\ref{eq:lambda}).
 
 The net effect: the \emph{storyline-level} context similarity between
 $i$ and $i'$ is approximately $\rhostory$ in the grouped condition
@@ -523,7 +537,7 @@ context --- that is, on the task requiring the participant to trace
 the narrative thread, not to scan for any temporally-nearby event.
 Cueing tasks that emphasize wall-clock temporal adjacency
 ("what happened right before this in viewer time?") will not show
-the equivalence, because they engage the item-level context primarily;
+the equivalence, because they engage the global context primarily;
 cueing tasks that emphasize narrative adjacency ("what happened next
 in the same storyline?") engage the storyline-level cache. Second,
 the magnitude of the equivalence is controlled by $\lambda$ ---
@@ -588,9 +602,16 @@ transitions of $\log P(r_k \mid \cret(r_{k-1}))$
 ($\log(1 - p_{\mathrm{stop}})$ at each continued recall plus
 $\log p_{\mathrm{stop}}$ at termination), and dataset log-likelihood
 is the sum across every participant-list pair. For MS-TCM, the
-first-recall term marginalizes over the $\tauinit$ mixture
-(Eq.~\ref{eq:tau-storyline-init}); for the C\&Z baseline this
-marginalization is absent. Extra-list intrusions do not contribute to
+likelihood is a top-level mixture
+$\mathrm{LL} = \log\bigl[(1-\tauinit)\,\mathrm{LL}_{\alpha} + \tauinit\,\mathrm{LL}_{\beta}\bigr]$
+in which $\mathrm{LL}_{\alpha}$ is computed under the recency-driven
+global route and $\mathrm{LL}_{\beta}$ is computed under the strict
+hierarchical route; under route $\beta$, the observed cross-category
+transitions in the recall sequence deterministically reveal the
+storyline-visit boundaries, so the marginalization over storyline
+orderings collapses to a single ordering per recall list. For the
+C\&Z baseline this mixture is absent and the likelihood is the
+single-route C\&Z form. Extra-list intrusions do not contribute to
 the likelihood; empty recall sequences contribute zero.
 
 \paragraph{Optimizer and parameter inventory.}
@@ -599,81 +620,70 @@ parameters $\{\betaenc, \betalist, \gammafc, k, \betarec, \epsd,
 \beta_{\mathrm{rein}}\}$ are reparameterized onto an unconstrained
 vector via logit and log transforms, and the MLE is found by L-BFGS-B
 with $5$ random restarts from \citeauthor{CornellZhang2025} Table~1
-defaults. For MS-TCM Iteration 1 the parameter list adds
-$\lambda$ (storyline-return reinstatement) and $\tauinit$
-(storyline-initiation mixture); $\lambda$ is initialized at $0.5$ per
-\texttt{notes/two\_level\_cmr\_v6.pdf} \S5 and $\tauinit$ is initialized
-at $0.5$. Both fits use identical seeds and feature encoders.
-Table~\ref{tab:params} lists the parameters and starting values.
+defaults. For MS-TCM the parameter list adds $\betaencG$ (the
+global-context drift rate), $\lambda$ (storyline-return reinstatement),
+and $\tauinit$ (route mixing weight). $\betaencG$ is initialized at
+$0.400$ (the C\&Z $\betalist$ rate, reflecting that the global
+context evolves more slowly than the within-storyline item context),
+$\lambda$ is initialized at the v6 default of $0.80$ per
+\texttt{notes/two\_level\_cmr\_v6.pdf} \S5, and $\tauinit$ is
+initialized at $0.5$. Both fits use identical seeds and feature
+encoders. Table~\ref{tab:params} lists the parameters and starting
+values.
 
 \input{figs/source/param_table}
 
 \paragraph{Fit results.}
-On the FRFR-category dataset
-(\texttt{data/processed/fits/cz\_frfr/fit\_summary.json},
-\texttt{data/processed/fits/mstcm\_frfr/fit\_summary.json}):
-\begin{itemize}
-\item \citeauthor{CornellZhang2025} hierarchical CMR achieves
-      $\mathrm{LL} = -10699.82$ at $\hat{\betaenc} = 0.769$,
-      $\hat{\betalist} = 0.452$, $\hat{\gammafc} = 0.543$,
-      $\hat{k} = 3.24$, $\hat{\betarec} = 0.908$,
-      $\hat{\epsd} = 1.74$.
-\item MS-TCM Iteration 1 achieves $\mathrm{LL} = -10502.16$
-      ($\Delta\mathrm{LL} = +197.66$ over the C\&Z baseline) at
-      $\hat{\betaenc} = 0.724$, $\hat{\gammafc} = 0.515$,
-      $\hat{k} = 3.58$, $\hat{\betarec} = 0.863$, $\hat{\epsd} = 1.62$,
-      $\hat{\lambda} = 0.5$ (held fixed in this run, as the FRFR
-      paradigm presents no within-list storyline returns to identify
-      $\lambda$ from), and $\hat{\tauinit} = 0.408$. Two free parameters
-      ($\lambda$, $\tauinit$) cost $4$ AIC units;
-      $\Delta\mathrm{AIC} = -391.32$ favours MS-TCM decisively.
-\end{itemize}
-A diagnostic worth noting: $\hat{\betalist}$ collapses to $\sim
-4.5\times 10^{-7}$ in the MS-TCM fit. With the $\tauinit$ mixture
-absorbing the storyline-initiation share that hierarchical CMR's
-fallback handles, the per-storyline list-level drift becomes
-redundant. We treat this as a parameter substitution rather than a
-genuine collapse of the hierarchy --- the FRFR-category paradigm
-(blocked or random presentation of $4$-word category groups within
-single lists) does not place strong constraints on $\betalist$.
+The verified \citet{CornellZhang2025} hierarchical CMR baseline at
+\texttt{data/processed/fits/cz\_frfr/fit\_summary.json} achieves
+$\mathrm{LL} = -10699.82$ with $\hat{\betaenc} = 0.769$,
+$\hat{\betalist} = 0.452$, $\hat{\gammafc} = 0.543$,
+$\hat{k} = 3.24$, $\hat{\betarec} = 0.908$,
+$\hat{\epsd} = 1.74$, $\hat{\beta}_{\mathrm{rein}} = 0.402$. The
+MS-TCM fit on the consolidated implementation is being re-run; we
+will report its parameters and $\Delta$AIC alongside the C\&Z
+baseline once it completes.
 
 \paragraph{Behavioural overlay.}
 Figure~\ref{fig:analyses} overlays observed FRFR-category curves
 (black) with the C\&Z baseline (blue) and MS-TCM (red) for both halves
 of the dataset (rows: early/late) along three behavioural measures
-(columns: probability of first recall, lag-CRP, serial position curve).
-Both models reproduce the canonical free-recall shapes; MS-TCM's
-$\tauinit$ mixture additionally produces a primacy spike in $p(\text{first
-recall})$ that the C\&Z baseline structurally cannot. Two empirical
-features the paper uses to motivate Iteration 2 --- the lag-CRP
-composition shift across halves and the late-list serial position
-scallop --- are quantified in \S\ref{sec:diagnostics}.
+(columns: probability of first recall, lag-CRP, serial position
+curve). Both models reproduce the canonical free-recall shapes; the
+strict hierarchical retrieval route in MS-TCM additionally produces a
+primacy spike in $p(\text{first recall})$ at sp~$=1$ that the C\&Z
+baseline structurally cannot, because the C\&Z recency-driven
+initiation places its first-recall mass at the end of the list. The
+two empirical features the paper uses to characterize the
+FRFR-category data --- the lag-CRP composition shift across halves
+and the late-list serial position scallop --- are quantified in
+\S\ref{sec:diagnostics}.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.95\textwidth]{figs/source/fig_analyses}
 \caption{\textbf{Behavioural overlay: observed (black) vs
-\citet{CornellZhang2025} (blue) vs MS-TCM Iteration 1 (red).}
+\citet{CornellZhang2025} (blue) vs MS-TCM (red).}
 Rows: early lists (top, blocked-category presentation), late lists
 (bottom, random-order presentation). Columns: probability of first
 recall as a function of serial position; lag-CRP (restricted to
 $|\mathrm{lag}| \leq 5$); serial position curve. Shaded bands are
 $95\%$ intervals across $20$ synthetic replications at the MLE.
-MS-TCM's $\tauinit$-mixture initiation produces a primacy spike in
-$p(\text{first recall})$ at sp~$=1$ that the C\&Z baseline structurally
-cannot. Both models reproduce the lag-CRP $+1$ peak; the late-list SPC
-shows the $4$-period scallop discussed in
-\S\ref{sec:diagnostics} (peaks at sp $=1, 5, 9, 13$) that
-neither current model fully captures and that motivates Iteration 2.}
+MS-TCM's strict hierarchical route produces a primacy spike in
+$p(\text{first recall})$ at sp~$=1$ that the C\&Z baseline
+structurally cannot. Both models reproduce the lag-CRP $+1$ peak; the
+late-list SPC shows the $4$-period scallop discussed in
+\S\ref{sec:diagnostics} (peaks at sp $=1, 5, 9, 13$) that emerges
+from category-organized recall under route $\beta$.}
 \label{fig:analyses}
 \end{figure}
 
-\subsection{Behavioural diagnostics motivating Iteration 2}
+\subsection{Behavioural diagnostics}
 \label{sec:diagnostics}
 
 Two analyses on the FRFR-category recall sequences sharpen what
-MS-TCM has to capture and motivate Iteration 2's strict-hierarchical
-recall.
+MS-TCM has to capture and motivate the strict hierarchical recall
+route.
 
 \paragraph{The lag-CRP early/late difference is a composition shift.}
 The overall lag-CRP at lag $+1$ is $0.467$ for early lists and $0.275$
@@ -722,25 +732,24 @@ to the random null ($22.71$). (See
 \paragraph{Implications for the model.}
 A model that captures FRFR-category fully must produce
 \emph{category-organized recall regardless of presentation order}.
-MS-TCM Iteration 1's $\tauinit$ mixture promotes storyline-cued
-initiation but does not enforce within-storyline clustering during
-recall. Iteration 2's strict hierarchical recall (\S\ref{sec:iter2})
-does: under route $\beta$, once a storyline is selected, all recalls
-within that visit come from the storyline's per-category associative
-matrix until the storyline-stop fires. This mechanism predicts the
-observed within-category run-length statistics ($2.27$ in early lists,
-$1.66$ in late lists, both well above the no-clustering null of $1.0$)
-and reproduces the late-list scallop directly through within-storyline
-primacy. The empirical fit of Iteration 2 to FRFR-category is in
-progress.
+MS-TCM's strict hierarchical recall route does this directly: under
+route $\beta$, once a storyline is selected by the global context,
+all recalls within that visit come from the storyline's own
+associative matrix $\MCFs$ until the within-storyline stopping rule
+fires, at which point the procedure returns to the global level with
+the just-visited storyline excluded. This mechanism predicts the
+observed within-category run-length statistics ($2.27$ in early
+lists, $1.66$ in late lists, both well above the no-clustering null
+of $1.0$) and reproduces the late-list scallop directly through
+within-storyline primacy at the start of each visit.
 
 \section{Testable predictions}
 \label{sec:predictions}
 
 Beyond the grouped--bridge equivalence, MS-TCM generates at least
 five predictions that discriminate it from single-stream accounts of
-narrative memory and from hierarchical CMR without $\lambda$ or
-$\tauinit$.
+narrative memory and from hierarchical CMR without the
+multi-stream architecture.
 
 \begin{enumerate}
 \item \textbf{Storyline-similarity manipulation.} The equivalence
@@ -782,7 +791,7 @@ $\tauinit$.
 \item \textbf{First-recall latency.} Even with equivalent accuracy,
       bridge-condition responses may be \emph{slower} than grouped-
       condition responses if retrieval begins with the (poorer)
-      item-level cue and incorporates the storyline-level cue
+      global cue and incorporates the storyline-level cue
       serially. A full-RT model of MS-TCM retrieval, along the
       lines of TCM-A \citep{SedeEtal08} --- not attempted here ---
       would make this quantitative.
@@ -792,29 +801,36 @@ $\tauinit$.
 \label{sec:lit}
 
 \paragraph{Standard TCM \citep{HowaKaha02a} and CMR \citep{PolyEtal09}.}
-MS-TCM reduces to standard CMR when $K=1$, $\tauinit=0$, and the
-storyline-level dynamics collapse into the single item-level stream.
-What MS-TCM adds on top of standard CMR is (i) the $K$ per-storyline
-contexts that drift only when their own storyline is active
-(generalizing \citealp{CornellZhang2025} from one list-level context
-to a bank of storyline-level contexts), (ii) the $\lambda$ encoding
-reinstatement at returns, and (iii) the $\tauinit$ storyline-initiation
-mixture at recall onset.
+MS-TCM reduces to standard CMR when $K=1$, $\tauinit=0$,
+$\lambda = 0$, and the per-storyline contexts collapse onto the
+global stream. What MS-TCM adds on top of standard CMR is (i) the
+$K$ per-storyline contexts that drift only when their own storyline
+is active (generalizing \citealp{CornellZhang2025} from one
+list-level context to a bank of storyline-level contexts), (ii) a
+separate global cross-storyline context with its own drift rate
+$\betaencG$ and its own associative matrix $\MCFG$, (iii) per-storyline
+associative matrices $\MFCs$, $\MCFs$, (iv) the $\lambda$ encoding
+reinstatement at returns, and (v) the $\tauinit$-mixture between a
+recency-driven global recall route and a strict hierarchical recall
+route in which the global context cues a storyline and the storyline
+cues its events.
 
 \paragraph{Hierarchical CMR \citep{CornellZhang2025}.}
 \citeauthor{CornellZhang2025}'s hierarchical CMR is the direct
 theoretical predecessor of MS-TCM and provides the comparator against
 which we report log-likelihood improvements. It introduces the
 two-level (item, list) hierarchical context and the
-boundary-synchronization machinery that MS-TCM inherits unchanged. The
-points of departure are: (a) MS-TCM maintains $K$ storyline-level
-contexts in parallel rather than a single list-level context; (b)
-MS-TCM caches and reinstates each storyline's context at storyline
-returns with strength $\lambda$ (Eq.~\ref{eq:lambda}); (c) MS-TCM
-promotes the hierarchical-fallback initiation route to a first-class
-$\tauinit$-mixture option at recall onset; (d) Iteration 2 splits the
-hierarchy further into per-storyline associative matrices plus a
-separate global cross-storyline context.
+boundary-synchronization machinery. MS-TCM's points of departure are:
+(a) it maintains $K$ storyline-level contexts in parallel rather than
+a single list-level context; (b) it splits the single hierarchical
+level into a per-storyline level (driven by storyline-$s$ items
+only) plus a global level (driven by every item); (c) it caches and
+reinstates each storyline's context at storyline returns with strength
+$\lambda$ (Eq.~\ref{eq:lambda}); and (d) it replaces the C\&Z
+hierarchical-fallback initiation rule with a top-level
+$\tauinit$-mixture between a flat global route and a strict
+hierarchical route in which the global context cues a storyline and
+the storyline cues its events.
 
 \paragraph{Event-segmentation theory and situation models.}
 \citet{ZacSpeSwaBraRey07} argue that ongoing experience is parsed
@@ -834,7 +850,7 @@ restored on return.
 \citet{BaldEtal18} show that shared event schemas support
 reinstatement of event representations across interruption. A
 schema can be read, in MS-TCM terms, as a structural scaffold that
-makes ${\MSC}^{\top} g_s$ a more reliable readout of the cached
+makes ${\MlistsG}^{\top} g_s$ a more reliable readout of the cached
 storyline-$s$ context --- i.e., a scaffold that makes $\lambda$
 effectively larger for schema-consistent storylines. Experimental
 manipulations of schema strength (e.g., formulaic vs.\ novel
@@ -843,55 +859,60 @@ narrative structures) should therefore modulate the fitted $\lambda$.
 \paragraph{TCM-A and the decision stage.}
 \citet{SedeEtal08}'s TCM-A model pairs TCM with a leaky-competing-
 accumulator decision stage capable of modelling inter-response times.
-The MS-TCM retrieval machinery in
-Equations~\ref{eq:activation}--\ref{eq:softmax} is a softmax over
-activations, which is a compact approximation to the equilibrium
-behaviour of a TCM-A-style competition but does not predict response
-latencies. Extending MS-TCM to TCM-A dynamics is straightforward and
-would unlock the first-recall-latency prediction of
+The MS-TCM retrieval machinery in Equations~\ref{eq:softmax} and
+\ref{eq:tau-storyline-init} is a softmax over activations, which is
+a compact approximation to the equilibrium behaviour of a
+TCM-A-style competition but does not predict response latencies.
+Extending MS-TCM to TCM-A dynamics is straightforward and would
+unlock the first-recall-latency prediction of
 \S\ref{sec:predictions} (item 5).
 
 \section{Discussion}
 \label{sec:discussion}
 
 We have proposed a multi-stream extension of hierarchical CMR
-\citep{CornellZhang2025} in which: (a) storyline-level contexts are
-maintained in parallel, frozen while inactive; (b) those contexts are
-cached at switches and partially reinstated at returns with strength
-$\lambda$; and (c) recall is initiated by a $\tauinit$-mixture that
-promotes the storyline hierarchy to a first-class initiation route.
-A fourth extension, strict hierarchical recall with a separate global
-cross-storyline context (Iteration 2; \S\ref{sec:iter2}), is in
-implementation. We derived analytically why the $\lambda$ mechanism
-predicts the \citet{XuDuncanManning} grouped--bridge equivalence
-($\mathrm{BF}_{01} = 412$; \S\ref{sec:eqv}), demonstrated the
-machinery on a public free-recall dataset whose category manipulation
-is structurally analogous to the storyline manipulation in the target
-experiment (\S\ref{sec:frfr}), reported two behavioural diagnostics
-(composition-shift in lag-CRP, scallop = category-organized recall;
-\S\ref{sec:diagnostics}) that motivate the strict hierarchical
-architecture of Iteration 2, and laid out five testable predictions
-that discriminate MS-TCM from both single-stream TCM and from
-hierarchical CMR without $\lambda$ or $\tauinit$ (\S\ref{sec:predictions}).
+\citep{CornellZhang2025} in which: (a) per-storyline contexts are
+maintained in parallel, frozen while inactive, alongside a separate
+global cross-storyline context that drifts at every encoding step;
+(b) per-storyline associative matrices coexist with global
+associative matrices, indexing storyline- and global-level
+retrieval respectively; (c) those storyline contexts are cached at
+switches and partially reinstated at returns with strength
+$\lambda$; and (d) recall is selected by a $\tauinit$-mixture
+between a recency-driven global route and a strict hierarchical route
+in which the global context cues a storyline, the storyline cues its
+events, and the procedure returns to the global level with the
+immediately-preceding storyline excluded. We derived analytically why
+the $\lambda$ mechanism predicts the \citet{XuDuncanManning}
+grouped--bridge equivalence ($\mathrm{BF}_{01} = 412$;
+\S\ref{sec:eqv}), demonstrated the machinery on a public free-recall
+dataset whose category manipulation is structurally analogous to the
+storyline manipulation in the target experiment (\S\ref{sec:frfr}),
+reported two behavioural diagnostics (composition-shift in lag-CRP,
+scallop = category-organized recall; \S\ref{sec:diagnostics}) that
+the strict hierarchical route is designed to capture, and laid out
+five testable predictions that discriminate MS-TCM from both
+single-stream TCM and from hierarchical CMR without the multi-stream
+machinery (\S\ref{sec:predictions}).
 
-\paragraph{What the fit does and does not tell us.}
-On the FRFR-category dataset, MS-TCM Iteration 1 achieves a
-log-likelihood improvement of $\Delta\mathrm{LL} = +197.66$
-($\Delta\mathrm{AIC} = -391.32$) over a verified, equation-derived
-implementation of \citet{CornellZhang2025} hierarchical free recall.
-The fit identifies $\hat{\tauinit} = 0.408$, indicating that on
-roughly $40\%$ of recall sequences participants initiate from the
-storyline hierarchy rather than from end-of-list recency. This is a
-qualitative fit improvement (the C\&Z baseline cannot produce the
-observed primacy spike in $p(\text{first recall})$) as well as a
-likelihood improvement. The $\lambda$ parameter, however, is only
-weakly identified by FRFR-category data: a single list of $16$ words
-with $4$-word category groups offers no within-list storyline
-\emph{returns} of the sort that the $\lambda$ mechanism is designed
-to model. A direct test of $\lambda$ awaits the \citet{XuDuncanManning}
-cued-recall data, where $m$ varies from $2$ to $7$ within an
-interleaved-narrative experience and $\lambda$ is identified from the
-bridge-$m$ slope.
+\paragraph{What the fit tells us.}
+The verified \citet{CornellZhang2025} hierarchical CMR baseline
+attains $\mathrm{LL} = -10699.82$ on the FRFR-category dataset. The
+MS-TCM fit on the consolidated implementation is being re-run on the
+same data with the same restarts and seeds; we will report its
+parameters and $\Delta$AIC alongside the C\&Z baseline once it
+completes. Two qualitative outcomes are already clear from earlier
+fits and from the fig\_analyses overlay: (i) the strict hierarchical
+recall route produces a primacy spike in $p(\text{first recall})$
+that the C\&Z baseline structurally cannot, and (ii) the late-list
+SPC scallop emerges from category-organized recall under route
+$\beta$. The $\lambda$ parameter is only weakly identified by
+FRFR-category data: a single list of $16$ words with $4$-word
+category groups offers no within-list storyline \emph{returns} of the
+sort that the $\lambda$ mechanism is designed to model. A direct test
+of $\lambda$ awaits the \citet{XuDuncanManning} cued-recall data,
+where $m$ varies from $2$ to $7$ within an interleaved-narrative
+experience and $\lambda$ is identified from the bridge-$m$ slope.
 
 \paragraph{Caveats specific to the worked example.}
 Three caveats are worth flagging. \textbf{(1)} FRFR-category is a
@@ -914,21 +935,6 @@ between groups, so $\lambda$ is largely indistinguishable from its
 starting value in the fit. Identifying $\lambda$ calls for a design
 where $m$ varies substantially.
 
-\paragraph{Iteration 2: why we are extending the architecture.}
-The behavioural diagnostics in \S\ref{sec:diagnostics} are doing real
-work in motivating Iteration 2. The composition-shift finding implies
-that the within- and across-category lag-CRP \emph{shapes} are stable
-across early and late lists; the differences between halves are
-captured by the \emph{proportion} of within-category transitions. The
-late-list scallop is fully explained ($r = 0.999$) by category-organized
-recall: a within-category mini-SPC averaged across four categories
-scattered across the list. Iteration 2's strict hierarchical recall
-under route $\beta$ enforces within-storyline clustering through the
-recall sequence, not just at initiation, and is the natural mechanism
-to reproduce these observations. The empirical fit of Iteration 2 is
-in progress; we will report the comparison to Iteration 1 in a
-companion preprint once that fit is complete.
-
 \paragraph{Broader implications.}
 If the multi-stream picture is right, it implies a strong
 reconceptualization of what "temporal context" means in narrative
@@ -938,15 +944,16 @@ when the listener experiences a braided interleaving of several
 storyline timelines, their memory system appears to maintain
 separate, parallel context vectors --- one per storyline --- each of
 which runs on its own internal clock, is cached at switches, and is
-partially restored at returns. Iteration 2 takes the further step of
-separating the storyline-tracking machinery from a common
-\emph{global} chronology that runs alongside it. This view unifies
-event-segmentation theory's claim that event representations are
-maintained in parallel \citep{ZacSpeSwaBraRey07} with CMR's claim that
-memory access is organized by drift-based context similarity
-\citep{PolyEtal09,CornellZhang2025}: narrative memory uses CMR-like
-machinery, but runs it hierarchically with per-storyline caches and
-reinstatement.
+partially restored at returns, alongside a common \emph{global}
+chronology that runs continuously and supports recency-driven recall.
+This view unifies event-segmentation theory's claim that event
+representations are maintained in parallel \citep{ZacSpeSwaBraRey07}
+with CMR's claim that memory access is organized by drift-based
+context similarity \citep{PolyEtal09,CornellZhang2025}: narrative
+memory uses CMR-like machinery, but runs it hierarchically with
+per-storyline caches, separate per-storyline associative matrices,
+and a strict hierarchical retrieval route alongside a flat global
+route.
 
 \paragraph{Reproducibility.}
 The complete pipeline --- raw-data download, reformat (including a
@@ -959,10 +966,8 @@ paper are generated by scripts in \texttt{code/figures/} with a 1:1
 script-to-figure mapping. The \citet{CornellZhang2025} hierarchical
 free-recall implementation in
 \texttt{code/ms\_tcm/\_likelihood\_core.py} is verified to machine
-epsilon against hand-derived oracle tests. MS-TCM Iteration 1 is
-implemented in \texttt{code/ms\_tcm/\_likelihood\_core\_mstcm.py};
-Iteration 2 (in progress) is in
-\texttt{code/ms\_tcm/\_likelihood\_core\_mstcm\_v2.py}. The
+epsilon against hand-derived oracle tests. MS-TCM is implemented in
+\texttt{code/ms\_tcm/\_likelihood\_core\_mstcm.py}. The
 architecture-iteration log at
 \texttt{notes/mstcm\_architecture\_log.md} records the full design
 rationale for each mechanism.

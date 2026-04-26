@@ -45,37 +45,34 @@
 \section*{S0. Architectural lineage of MS-TCM}
 
 The present paper describes MS-TCM as a multi-stream extension of
-\citet{CornellZhang2025} hierarchical CMR. Two architectural revisions
-preceded the current state. The original v1 formulation
+\citet{CornellZhang2025} hierarchical CMR. The model evolved through
+several preceding architectural revisions whose details are recorded
+in the iteration log at
+\texttt{notes/mstcm\_architecture\_log.md} and are not part of the
+present specification. The earliest formulation
 (\texttt{notes/ms-tcm.pdf}) used a single global context plus a bank
 of storyline-specific context vectors mixed into an encoding composite
 with fixed weights, plus a task-dependent retrieval reweighting; that
 architecture failed to reproduce the canonical free-recall phenomena
 (serial position curve, probability of first recall, lag-CRP) because
 it bypassed the standard CMR retrieval route, and was retired in
-favour of the v6 design
-(\texttt{notes/two\_level\_cmr\_v6.pdf}) which rebases MS-TCM on top
-of \citet{CornellZhang2025}. The v6 spec proposed a single new
-mechanism over the C\&Z baseline: storyline-return reinstatement at
-encoding with strength $\lambda$ (v6 Eq.~6).
-
-In implementing v6, two further additions emerged from the FRFR-category
-worked example. First, the C\&Z 2025 baseline structurally cannot
-produce a primacy spike in the probability of first recall: the
-recency-driven initiation rule places its mass at the end of the list
-even when participants frequently begin recall from sp~$=1$ items.
-This motivated the $\tauinit$ \emph{storyline-initiation mixture}
-(retrieval section of the main text). Second, the late-list
-serial position scallop and within-category clustering in random
-presentation lists motivated a second iteration with strict
-hierarchical retrieval and a separate global cross-storyline context
-(Iteration 2 in the main text). The full
+favour of the v6 design (\texttt{notes/two\_level\_cmr\_v6.pdf})
+which rebases MS-TCM on top of \citet{CornellZhang2025}. Subsequent
+empirical observations in the FRFR-category worked example motivated
+two further additions to the v6 design: a $\tauinit$ recall-onset
+mixture (because the C\&Z 2025 baseline structurally cannot produce a
+primacy spike in the probability of first recall) and a strict
+hierarchical recall route with a separate global cross-storyline
+context (because participants organize recall by category even when
+the presentation order is randomized). The present paper consolidates
+those additions into a single MS-TCM specification --- the model
+described in \S2 of the main text and implemented at
+\texttt{code/ms\_tcm/\_likelihood\_core\_mstcm.py}. The
 iteration-by-iteration log of empirical motivations and architectural
-decisions is at \texttt{notes/mstcm\_architecture\_log.md}. The v1
-$\to$ v6 symbol inventory and file-level deletion manifest is at
-\texttt{notes/v6\_migration.md}. Git history preserves the v1 source;
-this supplement and the main text use v6 notation augmented with the
-$\tauinit$ and Iteration~2 additions.
+decisions is at \texttt{notes/mstcm\_architecture\_log.md}; the symbol inventory and
+file-level deletion manifest from the earlier-spec migration is at
+\texttt{notes/v6\_migration.md}; git history preserves earlier
+sources.
 
 \section*{S1. Off-by-one correction in the reformatted recall table}
 
@@ -99,10 +96,10 @@ an intrusion rate below $5\%$, so any future off-by-one would fail CI.
 \section*{S2. Likelihood-surface flatness on small synthetic data}
 
 % TODO: re-run the grid-scan diagnostic against the current MS-TCM
-% Iteration 1 (beta_enc, gamma_fc) parameters and update the nat ranges
-% accordingly. The original numbers below were computed for the
-% retired v1 (beta_G, w_G) parameterization and are kept here only as
-% a placeholder for the qualitative pattern.
+% (beta_enc, gamma_fc) parameters and update the nat ranges accordingly.
+% The original numbers below were computed for an earlier (beta_G, w_G)
+% parameterization that no longer corresponds to the model and are kept
+% here only as a placeholder for the qualitative pattern.
 At FRFR-scale real data the MS-TCM likelihood surface is informative
 (grid scans across the active parameters $(\beta_{\mathrm{enc}}, \gamma_{\mathrm{fc}})$ give a
 range of $\sim 100$ nats across the parameter simplex, vs a
@@ -143,9 +140,11 @@ $\rho = \sqrt{1 + \beta^{2}(\dot{c}^{2} - 1)} - \beta\,\dot{c}$
 (where $\dot{c} = \mathbf{c}_{\mathrm{prev}} \cdot \mathbf{c}^{IN}$)
 from \citet{PolyEtal09} Eq.~3, which reduces exactly to
 $\sqrt{1 - \beta^{2}}$ when $\dot{c} = 0$ and preserves unit norm for
-arbitrary unit-norm inputs. This is applied at both the item level
-(rate $\beta_{\mathrm{enc}}$) and the storyline level
-(rate $\beta_{\mathrm{story}}$) in the v6 hierarchical layout; see
+arbitrary unit-norm inputs. This is applied at every drifting context
+in MS-TCM: the per-storyline level (rate $\beta_{\mathrm{story}}$ on
+storyline-$s$ items only), the global level (rate
+$\beta_{\mathrm{enc}}^{G}$ on every step), and the retrieval-cue
+drifts (rate $\beta_{\mathrm{rec}}$). See
 \texttt{code/ms\_tcm/drift.py::\_norm\_preserving\_rho}.
 
 \paragraph{Softmax gain $k$.}
@@ -166,10 +165,10 @@ v6-native CMR mechanism, not an MS-TCM extension. Under the
 \texttt{--standard-tcm} reduction the hierarchical layer is disabled
 and the implementation falls back to a stronger primacy gradient
 ($\phi = 30.0$, $\psi = 0.8$) to keep the shape assertion satisfied;
-under MS-TCM the hierarchical layer contributes additional primacy
-through the list-start synchronization of the storyline-level
-context, so a modest gradient ($\phi = 1.5$, $\psi = 0.5$) is
-sufficient.
+under MS-TCM the per-storyline associative matrices contribute
+additional primacy through the storyline-level beginning-of-list
+synchronization at the start of each route-$\beta$ visit, so a
+modest gradient ($\phi = 1.5$, $\psi = 0.5$) is sufficient.
 
 \paragraph{No-repeats candidate set.}
 Participants almost never repeat an item within one recall sequence
@@ -184,13 +183,10 @@ data do not poison the dataset log-likelihood.
 
 \section*{S4. Numerical-accuracy anchors and model comparison}
 
-The v1 MS-TCM numerical anchor (composite-similarity closed form at
-$\beta = 0.5$, $m = 3$) is retired alongside the v1 architecture: the
-present model does not form an encoding composite and has no analog of
-the v1 mixture weights. Two anchors take its place. First, the
-\citet{CornellZhang2025} hierarchical free-recall implementation in
-\texttt{code/ms\_tcm/\_likelihood\_core.py} is verified to $10^{-10}$
-tolerance against hand-derived oracle tests at
+The numerical anchor for MS-TCM's implementation has two parts.
+First, the \citet{CornellZhang2025} hierarchical free-recall
+implementation in \texttt{code/ms\_tcm/\_likelihood\_core.py} is
+verified to $10^{-10}$ tolerance against hand-derived oracle tests at
 \texttt{code/tests/test\_hcmr\_oracle.py}, so the comparator against
 which MS-TCM's $\Delta\mathrm{LL}$ is reported is itself a faithful
 implementation of its published inheritance. Second, when MS-TCM is
@@ -200,11 +196,13 @@ machine-epsilon tolerance --- a regression covered by
 \texttt{code/tests/test\_hcmr\_standard\_tcm.py}. The Layer 1 shape
 assertions of \texttt{code/tests/test\_behavioral\_regression.py} pin
 the canonical free-recall signatures (SPC, pFR, lag-CRP shapes) for
-both the C\&Z baseline and MS-TCM Iteration~1. Together these anchors
-establish that any reported $\Delta\mathrm{LL}$ between MS-TCM and the
-C\&Z baseline is attributable to the new mechanisms ($\lambda$,
-$\tauinit$, per-storyline contexts) rather than to implementation
-drift.
+both the C\&Z baseline and MS-TCM. Together these anchors establish
+that any reported $\Delta\mathrm{LL}$ between MS-TCM and the C\&Z
+baseline is attributable to the new mechanisms (per-storyline
+contexts, the global cross-storyline context, per-storyline
+associative matrices, $\lambda$, the $\tauinit$-mixture between
+recency-driven global recall and strict hierarchical recall) rather
+than to implementation drift.
 
 \newpage
 \renewcommand{\refname}{Supplementary references}
