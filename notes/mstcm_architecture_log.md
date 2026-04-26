@@ -297,29 +297,37 @@ mixture between two routes:
 After the first recall in EITHER route, β_rec drift updates c^global
 (and any active c^story) toward the recalled item's c^IN_rec.
 
-**Open questions where Jeremy's input matters most**:
+**Open questions — RESOLVED per Jeremy's input**:
 
-[OQ1] Should route α use the GLOBAL associative matrix (M^CF_G) or
-ALSO consult per-storyline matrices? Currently I'm specifying
-M^CF_G only, so route α is a pure-global retrieval with no
-storyline involvement. Alternative: route α uses a composite
-M^CF that's the union of M^CF_G + Σ_s M^CF_s. The first is
-cleaner for identifiability; the second has more total
-associations available at retrieval but blurs the route
-distinction.
+[OQ1] **Resolved: option (a)**. Route α uses M^CF_G only — pure
+global recall, no storyline involvement. This keeps route α and
+route β cleanly separated for identifiability. We can revisit
+later if the fit suggests blurred separation is needed.
 
-[OQ2] In route β step 4 (storyline exhaustion), should we ALSO
-update M^lists_G to reflect that the storyline was exhausted
-(e.g., zero out that row)? Or just track it via a separate
-"exhausted" mask? Mask is cleaner.
+[OQ2] **Resolved: separate `exhausted` mask, but with refined
+semantics**. The `exhausted` mask is NOT a permanent flag — it
+tracks only the **immediately-preceding** storyline. After route
+β recalls items from storyline ŝ_a and stops, ŝ_a is excluded
+from the next global storyline-selection. But once any OTHER
+storyline ŝ_b is visited, ŝ_a becomes available again on
+subsequent global re-selections. Implementation: maintain a
+single int `last_recently_exhausted_storyline` (initialized to
+−1); on each global storyline-selection step, exclude storyline
+matching this index from the softmax candidates; after a new ŝ
+is selected, update the index to the storyline JUST EXHAUSTED
+(only when the previous storyline's recall stopped). This
+captures the "you don't go back to the same storyline twice in a
+row" intuition, allowing return after intervening visits.
 
-[OQ3] In route β step 2, the "c_ret_s = e_start" choice produces
-pure within-storyline primacy. An alternative is c_ret_s =
-M^lists_G[ŝ] (the cached storyline-list context at storyline
-ŝ's last departure). That's the v6 Eq 6 / C&Z Eq 14 style
-reinstatement. Should give a more "C&Z-like" within-storyline
-recency-then-primacy curve for that storyline. We picked
-e_start for now to maximize the scallop signal.
+[OQ3] **Resolved (initial): option (ii) c_ret_s = e_start, with
+plan to test (iii) c_ret_s = M^lists_G[ŝ] (storyline's cached
+list-context) in a follow-up**. Option (ii) maximizes the
+scallop signal on blocked early lists. Option (iii) is more
+principled (it's literally what C&Z Eq 14 does for the
+hierarchical fallback) and may behave differently on interleaved
+lists where "beginning-of-storyline" and "beginning-of-list"
+diverge — in late FRFR-category lists (random order), these
+contexts will be very different vectors. Worth testing both.
 
 **Parameter inventory** (vs Iteration 1):
 - ADD β_enc^G: separate global-level encoding drift rate. 10 params total.

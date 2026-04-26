@@ -313,32 +313,7 @@ def main() -> int:
         )
         print(f"  {name} = {val:.4f}")
 
-    print("Computing observed measures + 95% CI across subjects...")
-    obs_spc_mean, obs_spc_lo, obs_spc_hi = _observed_band(
-        ds, serial_position.observed,
-    )
-    obs_pfr_mean, obs_pfr_lo, obs_pfr_hi = _observed_band(
-        ds, pfr.observed,
-    )
-    obs_crp_mean, obs_crp_lo, obs_crp_hi = _observed_band(
-        ds, lag_crp.observed,
-    )
-
-    print(f"Drawing {args.n_draws} synthetic datasets via C&Z...")
-    band_spc = _draw_band(
-        ds, params, n_draws=args.n_draws, seed=args.seed,
-        observe_fn=serial_position.observed,
-    )
-    band_pfr = _draw_band(
-        ds, params, n_draws=args.n_draws, seed=args.seed,
-        observe_fn=pfr.observed,
-    )
-    band_crp = _draw_band(
-        ds, params, n_draws=args.n_draws, seed=args.seed,
-        observe_fn=lag_crp.observed,
-    )
-
-    # Try to load MS-TCM fit and compute its bands too.
+    # Try to load MS-TCM fit too.
     mstcm_loaded = _load_mstcm_fitted_params()
     if mstcm_loaded is not None:
         params_mstcm, label_mstcm, ll_mstcm = mstcm_loaded
@@ -351,123 +326,192 @@ def main() -> int:
                 params_mstcm, name,
             ) else getattr(params_mstcm, "beta_story")
             print(f"  {name} = {val:.4f}")
-
-        print(f"Drawing {args.n_draws} synthetic datasets via MS-TCM...")
-        band_spc_mstcm = _draw_band(
-            ds, params_mstcm, n_draws=args.n_draws, seed=args.seed,
-            observe_fn=serial_position.observed, use_mstcm=True,
-        )
-        band_pfr_mstcm = _draw_band(
-            ds, params_mstcm, n_draws=args.n_draws, seed=args.seed,
-            observe_fn=pfr.observed, use_mstcm=True,
-        )
-        band_crp_mstcm = _draw_band(
-            ds, params_mstcm, n_draws=args.n_draws, seed=args.seed,
-            observe_fn=lag_crp.observed, use_mstcm=True,
-        )
     else:
         params_mstcm = label_mstcm = ll_mstcm = None
-        band_spc_mstcm = band_pfr_mstcm = band_crp_mstcm = None
 
-    fig, axes = plt.subplots(1, 3, figsize=(11, 3.2))
+    # Split FRFR-category into early (lists 0-7) vs late (lists 8-15).
+    # The two halves have systematically different category structure
+    # (early lists are blocked-by-category; late lists are random) and
+    # tend to produce different SPC / pFR / lag-CRP signatures.
+    pdf = ds.presented.to_pandas()
+    rdf = ds.recalled.to_pandas()
+    halves = []
+    for half_name, half_label, list_filter in [
+        ("early", "Lists 1–8 (blocked by category)", lambda l: l < 8),
+        ("late",  "Lists 9–16 (random order)",      lambda l: l >= 8),
+    ]:
+        keep_lists = sorted(set(int(l) for l in pdf["list"].unique()
+                                if list_filter(int(l))))
+        ds_half = Dataset(
+            presented=pa.Table.from_pandas(
+                pdf[pdf["list"].isin(keep_lists)].reset_index(drop=True),
+                preserve_index=False,
+            ),
+            recalled=pa.Table.from_pandas(
+                rdf[rdf["list"].isin(keep_lists)].reset_index(drop=True),
+                preserve_index=False,
+            ),
+            manifest=ds.manifest,
+        )
+        halves.append((half_name, half_label, ds_half))
+
+    rows = []
+    for half_name, half_label, ds_half in halves:
+        print(f"\n=== {half_label} ===")
+        print(f"Computing observed measures + 95% CI ({half_name})...")
+        obs = {
+            "spc": _observed_band(ds_half, serial_position.observed),
+            "pfr": _observed_band(ds_half, pfr.observed),
+            "crp": _observed_band(ds_half, lag_crp.observed),
+        }
+        print(f"Drawing {args.n_draws} synthetic datasets via C&Z ({half_name})...")
+        band_cz = {
+            "spc": _draw_band(ds_half, params, n_draws=args.n_draws,
+                              seed=args.seed,
+                              observe_fn=serial_position.observed),
+            "pfr": _draw_band(ds_half, params, n_draws=args.n_draws,
+                              seed=args.seed, observe_fn=pfr.observed),
+            "crp": _draw_band(ds_half, params, n_draws=args.n_draws,
+                              seed=args.seed, observe_fn=lag_crp.observed),
+        }
+        if mstcm_loaded is not None:
+            print(f"Drawing {args.n_draws} synthetic datasets via MS-TCM ({half_name})...")
+            band_mstcm = {
+                "spc": _draw_band(ds_half, params_mstcm, n_draws=args.n_draws,
+                                  seed=args.seed,
+                                  observe_fn=serial_position.observed,
+                                  use_mstcm=True),
+                "pfr": _draw_band(ds_half, params_mstcm, n_draws=args.n_draws,
+                                  seed=args.seed, observe_fn=pfr.observed,
+                                  use_mstcm=True),
+                "crp": _draw_band(ds_half, params_mstcm, n_draws=args.n_draws,
+                                  seed=args.seed, observe_fn=lag_crp.observed,
+                                  use_mstcm=True),
+            }
+        else:
+            band_mstcm = None
+        rows.append({
+            "half_label": half_label,
+            "obs": obs,
+            "cz": band_cz,
+            "mstcm": band_mstcm,
+        })
+
+    # --- Two-row figure: row 0 = early lists, row 1 = late lists ---
+    fig, axes = plt.subplots(2, 3, figsize=(11, 6.4), sharex=False)
     positions = np.arange(1, W + 1)
     cz_color = "#d62728"        # red — C&Z baseline
     mstcm_color = "#1f77b4"     # blue — MS-TCM
     obs_color = "black"
 
-    # Panel order follows the recall narrative:
-    #   A: pFR     — where do you START recalling?
-    #   B: lag-CRP — how do you TRANSITION from one recall to the next?
-    #   C: SPC     — what do you recall OVERALL?
+    # Panel order across columns:
+    #   col 0: pFR     — where do you start recalling?
+    #   col 1: lag-CRP — how do you transition from one recall to the next?
+    #   col 2: SPC     — what do you recall overall?
 
-    # Panel A: pFR.
-    ax = axes[0]
-    ax.plot(positions, obs_pfr_mean, "o-", color=obs_color,
-            label="observed (mean ± 95% CI)", markersize=3.5, linewidth=1.0)
-    ax.fill_between(positions, obs_pfr_lo, obs_pfr_hi,
-                    color=obs_color, alpha=0.15, linewidth=0)
-    m, lo, hi = band_pfr
-    ax.plot(positions, m, "--", color=cz_color,
-            label=label, linewidth=1.0)
-    ax.fill_between(positions, lo, hi, color=cz_color, alpha=0.2)
-    if band_pfr_mstcm is not None:
-        m, lo, hi = band_pfr_mstcm
-        ax.plot(positions, m, "--", color=mstcm_color,
-                label=label_mstcm, linewidth=1.0)
-        ax.fill_between(positions, lo, hi, color=mstcm_color, alpha=0.2)
-    ax.set_xlabel("serial position")
-    ax.set_ylabel("P(first recall)")
-    ax.set_title("A. Probability of first recall")
-    ax.legend(fontsize=8, loc="best")
-
-    # Panel B: lag-CRP.
-    # Lag = 0 is undefined (a transition cannot be to the same position),
-    # so we plot positive and negative lags as TWO SEPARATE curves rather
-    # than a single curve passing through 0.
-    ax = axes[1]
     lags = lag_crp.lag_axis(W)
     neg_keep = (lags >= -5) & (lags <= -1)
     pos_keep = (lags >= 1) & (lags <= 5)
     lags_neg = lags[neg_keep]
     lags_pos = lags[pos_keep]
 
-    # Observed (negative + positive curves).
-    ax.plot(lags_neg, obs_crp_mean[neg_keep], "o-", color=obs_color,
-            label="observed (mean ± 95% CI)", markersize=3.5, linewidth=1.0)
-    ax.fill_between(lags_neg, obs_crp_lo[neg_keep], obs_crp_hi[neg_keep],
-                    color=obs_color, alpha=0.15, linewidth=0)
-    ax.plot(lags_pos, obs_crp_mean[pos_keep], "o-", color=obs_color,
-            markersize=3.5, linewidth=1.0)
-    ax.fill_between(lags_pos, obs_crp_lo[pos_keep], obs_crp_hi[pos_keep],
-                    color=obs_color, alpha=0.15, linewidth=0)
+    panel_letters = [["A", "B", "C"], ["D", "E", "F"]]
 
-    # C&Z model bands (negative + positive curves).
-    m, lo, hi = band_crp
-    ax.plot(lags_neg, m[neg_keep], "--", color=cz_color,
-            label=label, linewidth=1.0)
-    ax.fill_between(lags_neg, lo[neg_keep], hi[neg_keep],
-                    color=cz_color, alpha=0.2)
-    ax.plot(lags_pos, m[pos_keep], "--", color=cz_color, linewidth=1.0)
-    ax.fill_between(lags_pos, lo[pos_keep], hi[pos_keep],
-                    color=cz_color, alpha=0.2)
+    for row_idx, row_info in enumerate(rows):
+        obs = row_info["obs"]
+        band_cz = row_info["cz"]
+        band_mstcm = row_info["mstcm"]
+        is_top_row = (row_idx == 0)
 
-    # MS-TCM model bands (negative + positive curves).
-    if band_crp_mstcm is not None:
-        m, lo, hi = band_crp_mstcm
-        ax.plot(lags_neg, m[neg_keep], "--", color=mstcm_color,
-                label=label_mstcm, linewidth=1.0)
+        # --- Column 0: pFR ---
+        ax = axes[row_idx, 0]
+        m_o, lo_o, hi_o = obs["pfr"]
+        ax.plot(positions, m_o, "o-", color=obs_color,
+                label="observed (mean ± 95% CI)",
+                markersize=3.5, linewidth=1.0)
+        ax.fill_between(positions, lo_o, hi_o,
+                        color=obs_color, alpha=0.15, linewidth=0)
+        m, lo, hi = band_cz["pfr"]
+        ax.plot(positions, m, "--", color=cz_color,
+                label=label, linewidth=1.0)
+        ax.fill_between(positions, lo, hi, color=cz_color, alpha=0.2)
+        if band_mstcm is not None:
+            m, lo, hi = band_mstcm["pfr"]
+            ax.plot(positions, m, "--", color=mstcm_color,
+                    label=label_mstcm, linewidth=1.0)
+            ax.fill_between(positions, lo, hi,
+                            color=mstcm_color, alpha=0.2)
+        ax.set_xlabel("serial position")
+        ax.set_ylabel("P(first recall)")
+        ax.set_title(
+            f"{panel_letters[row_idx][0]}. {row_info['half_label']}: "
+            f"probability of first recall",
+            fontsize=10,
+        )
+        if is_top_row:
+            ax.legend(fontsize=8, loc="best")
+
+        # --- Column 1: lag-CRP ---
+        ax = axes[row_idx, 1]
+        m_o, lo_o, hi_o = obs["crp"]
+        ax.plot(lags_neg, m_o[neg_keep], "o-", color=obs_color,
+                markersize=3.5, linewidth=1.0)
+        ax.fill_between(lags_neg, lo_o[neg_keep], hi_o[neg_keep],
+                        color=obs_color, alpha=0.15, linewidth=0)
+        ax.plot(lags_pos, m_o[pos_keep], "o-", color=obs_color,
+                markersize=3.5, linewidth=1.0)
+        ax.fill_between(lags_pos, lo_o[pos_keep], hi_o[pos_keep],
+                        color=obs_color, alpha=0.15, linewidth=0)
+
+        m, lo, hi = band_cz["crp"]
+        ax.plot(lags_neg, m[neg_keep], "--", color=cz_color, linewidth=1.0)
         ax.fill_between(lags_neg, lo[neg_keep], hi[neg_keep],
-                        color=mstcm_color, alpha=0.2)
-        ax.plot(lags_pos, m[pos_keep], "--", color=mstcm_color,
-                linewidth=1.0)
+                        color=cz_color, alpha=0.2)
+        ax.plot(lags_pos, m[pos_keep], "--", color=cz_color, linewidth=1.0)
         ax.fill_between(lags_pos, lo[pos_keep], hi[pos_keep],
-                        color=mstcm_color, alpha=0.2)
+                        color=cz_color, alpha=0.2)
 
-    ax.axvline(0, color="#bbb", linewidth=0.5, linestyle=":")
-    ax.set_xlabel("lag")
-    ax.set_ylabel("conditional response probability")
-    ax.set_title("B. Lag-CRP")
-    ax.legend(fontsize=8, loc="best")
+        if band_mstcm is not None:
+            m, lo, hi = band_mstcm["crp"]
+            ax.plot(lags_neg, m[neg_keep], "--", color=mstcm_color,
+                    linewidth=1.0)
+            ax.fill_between(lags_neg, lo[neg_keep], hi[neg_keep],
+                            color=mstcm_color, alpha=0.2)
+            ax.plot(lags_pos, m[pos_keep], "--", color=mstcm_color,
+                    linewidth=1.0)
+            ax.fill_between(lags_pos, lo[pos_keep], hi[pos_keep],
+                            color=mstcm_color, alpha=0.2)
 
-    # Panel C: SPC.
-    ax = axes[2]
-    ax.plot(positions, obs_spc_mean, "o-", color=obs_color,
-            label="observed (mean ± 95% CI)", markersize=3.5, linewidth=1.0)
-    ax.fill_between(positions, obs_spc_lo, obs_spc_hi,
-                    color=obs_color, alpha=0.15, linewidth=0)
-    m, lo, hi = band_spc
-    ax.plot(positions, m, "--", color=cz_color,
-            label=label, linewidth=1.0)
-    ax.fill_between(positions, lo, hi, color=cz_color, alpha=0.2)
-    if band_spc_mstcm is not None:
-        m, lo, hi = band_spc_mstcm
-        ax.plot(positions, m, "--", color=mstcm_color,
-                label=label_mstcm, linewidth=1.0)
-        ax.fill_between(positions, lo, hi, color=mstcm_color, alpha=0.2)
-    ax.set_xlabel("serial position")
-    ax.set_ylabel("P(recall)")
-    ax.set_title("C. Serial-position curve")
-    ax.legend(fontsize=8, loc="best")
+        ax.axvline(0, color="#bbb", linewidth=0.5, linestyle=":")
+        ax.set_xlabel("lag")
+        ax.set_ylabel("conditional response probability")
+        ax.set_title(
+            f"{panel_letters[row_idx][1]}. {row_info['half_label']}: "
+            f"lag-CRP",
+            fontsize=10,
+        )
+
+        # --- Column 2: SPC ---
+        ax = axes[row_idx, 2]
+        m_o, lo_o, hi_o = obs["spc"]
+        ax.plot(positions, m_o, "o-", color=obs_color,
+                markersize=3.5, linewidth=1.0)
+        ax.fill_between(positions, lo_o, hi_o,
+                        color=obs_color, alpha=0.15, linewidth=0)
+        m, lo, hi = band_cz["spc"]
+        ax.plot(positions, m, "--", color=cz_color, linewidth=1.0)
+        ax.fill_between(positions, lo, hi, color=cz_color, alpha=0.2)
+        if band_mstcm is not None:
+            m, lo, hi = band_mstcm["spc"]
+            ax.plot(positions, m, "--", color=mstcm_color, linewidth=1.0)
+            ax.fill_between(positions, lo, hi, color=mstcm_color, alpha=0.2)
+        ax.set_xlabel("serial position")
+        ax.set_ylabel("P(recall)")
+        ax.set_title(
+            f"{panel_letters[row_idx][2]}. {row_info['half_label']}: "
+            f"serial-position curve",
+            fontsize=10,
+        )
 
     fig.tight_layout()
     fig.savefig(out, bbox_inches="tight", transparent=True)
