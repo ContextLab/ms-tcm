@@ -976,3 +976,41 @@ per-recall identity precision for marginal-curve fidelity.
 
 **Open question for Iteration 5**: should we switch to a curve-matching
 loss to better fit the SPC magnitude? Discussed but not yet decided.
+
+### Iteration 5: curve-matching loss + standard CMR baseline
+
+**Decision (2026-04-26)**: implement curve-matching fitting and run
+THREE models on BOTH objectives for fair comparison:
+
+- **C&Z 2025 hierarchical** (existing): the current canonical baseline.
+- **MS-TCM** (existing): C&Z + per-storyline contexts + λ + τ + w_global.
+- **Polyn et al. 2009 standard CMR** (NEW): single context, primacy
+  gradient (φ_s, φ_d), no hierarchical fallback. The classical CMR
+  baseline that C&Z's hierarchical mechanism replaced.
+
+Each model fits under both:
+- **trial-level log-likelihood**: principled MLE, gives valid AIC/BIC
+- **curve-RMSE**: minimizes equal-weight RMSE between simulated and
+  observed (SPC, pFR, lag-CRP) feature vectors
+
+This 3 × 2 = 6-fit grid lets us answer:
+- Which model class is preferred under each objective?
+- Does the storyline mechanism (MS-TCM-specific) add explanatory power
+  beyond hierarchical retrieval (C&Z-specific) and primacy gradient
+  (Polyn-CMR-specific)?
+- How do the model predictions look on the figures under each fit?
+
+**Implementation**:
+- `code/scripts/fit_mstcm_curves.py`: refactored to support both
+  C&Z and MS-TCM via `--model={cz,mstcm}` flag. Uses
+  `scipy.optimize.minimize` with L-BFGS-B and `eps=0.05` to overcome
+  the stochastic-loss noise floor (default `eps≈1.5e-8` is below the
+  noise level and causes the optimizer to declare convergence at
+  iter 0).
+- Outputs to `data/processed/fits/{cz_curves_frfr, mstcm_curves_frfr}/
+  fit_summary.json`.
+- Standard CMR module `_likelihood_core_cmr.py` and `fit_cmr_to_frfr.py`
+  TBD (deferred to its own iteration once curve fits land).
+
+**Deferred to Iteration 5b**: standard CMR (Polyn 2009) implementation,
+trial-LL and curve fits, addition to fig_analyses as a third overlay.

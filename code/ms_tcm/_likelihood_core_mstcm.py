@@ -837,3 +837,415 @@ def simulate_recalls_mstcm(
         last_visited_s = s_hat
 
     return recalls
+
+
+# --- JAX-accelerated simulator (for fast curve-matching fits) ----------
+#
+# Implements the same generative process as ``simulate_recalls_mstcm``
+# (numpy) but compiled with jax.jit and amenable to vmap across lists
+# and draws. Same generative model — different RNG/control-flow
+# implementation. Used by the curve-matching fitter.
+#
+# Variable-length recall: bounded by `max_recalls = 3*W` and tracked
+# via a (max_recalls,) padded sps array + (max_recalls,) bool mask.
+# Loop structure: ONE jax.lax.while_loop with a "phase" state machine
+# encoding (route α | route β storyline-selection | route β
+# within-storyline | terminated). This avoids nested while_loops which
+# compile slowly.
+
+
+# Phase encoding for the unified while_loop state machine:
+PHASE_ALPHA = 0  # pure-global recall under route α
+PHASE_BETA_SELECT = 1  # route β: storyline-selection step
+PHASE_BETA_WITHIN = 2  # route β: within-storyline recall
+PHASE_TERMINATED = 3  # recall ended
+
+
+def _sample_categorical_logp(log_p, key):
+    """Sample one index from log-probabilities; returns int32 index."""
+    import jax
+    import jax.numpy as jnp
+    return jax.random.categorical(key, log_p)
+
+
+def _simulate_recalls_mstcm_jax_impl(
+    hp: MSCoreHyperparams,
+    W: int,
+    K: int,
+    cat_indices,
+    key,
+    max_recalls: int,
+):
+    """JAX-jit-compatible simulator for MS-TCM.
+
+    Returns ``(recalls_padded, recall_mask)`` of shape ``(max_recalls,)``
+    each. Padding entries have sp=0 and mask=False.
+
+    Generative process matches ``simulate_recalls_mstcm`` (numpy):
+    - With prob (1-τ): route α — pure-global recall using M^CF_G,
+      stopping rule, terminate.
+    - With prob τ: route β — strict-hierarchical recall (storyline
+      selection → within-storyline retrieval → return to selection,
+      with immediately-preceding-storyline excluded and fully-exhausted
+      storylines blocked).
+
+    The simulator is implemented as a single jax.lax.while_loop with a
+    phase state (PHASE_ALPHA | PHASE_BETA_SELECT | PHASE_BETA_WITHIN |
+    PHASE_TERMINATED). Suitable for vmap across (cat_indices, key) for
+    batched simulation.
+
+    This is the un-jitted impl; callers should use the jitted wrapper
+    ``simulate_recalls_mstcm_jax`` (or the vmapped ``..._batch``).
+    """
+    import jax
+    import jax.numpy as jnp
+
+    d = W + 1
+
+    # Encode (JAX path).
+    enc = run_encoding_mstcm(
+        hp, W, K, cat_indices, jnp, jnp.float64,
+    )
+    (c_item_traj_g, c_item_per_s, c_story_per_s, c_list_g_end,
+     m_fc_g, m_cf_g, m_fc_s, m_cf_s, m_sc) = enc
+    c_global_end = c_item_traj_g[W]
+    e_start = jnp.zeros(d, dtype=jnp.float64).at[0].set(1.0)
+
+    # Pre-compute in_story_mask per storyline (K, W) bool.
+    sp_indices = jnp.arange(W)
+    in_story_masks = (
+        cat_indices[None, :] == jnp.arange(K)[:, None]
+    )  # shape (K, W)
+
+    # Decide initial route.
+    key, sub = jax.random.split(key)
+    use_alpha = jax.random.uniform(sub) >= hp.tau_init
+
+    # Initial state for while_loop.
+    init_state = {
+        "key": key,
+        "phase": jnp.where(use_alpha, PHASE_ALPHA, PHASE_BETA_SELECT),
+        "c_ret_g": c_global_end,  # used by route α and route β selection
+        "c_ret_s": e_start,  # used by route β within-storyline (placeholder)
+        "already_mask": jnp.zeros(W, dtype=bool),
+        "fully_exhausted": jnp.zeros(K, dtype=bool),
+        "last_visited_s": jnp.asarray(-1, dtype=jnp.int32),
+        "current_s": jnp.asarray(-1, dtype=jnp.int32),
+        "step": jnp.asarray(0, dtype=jnp.int32),
+        # Step at which the current within-storyline visit began. Used
+        # to detect zero-recall visits (defensive guard mirroring
+        # ``simulate_recalls_mstcm`` lines 834-835: if a visit produced
+        # no recall, mark its storyline fully exhausted to avoid
+        # re-selecting it).
+        "visit_start_step": jnp.asarray(0, dtype=jnp.int32),
+        "recalls": jnp.zeros(max_recalls, dtype=jnp.int32),
+        "recall_mask": jnp.zeros(max_recalls, dtype=bool),
+    }
+
+    def cond_fn(state):
+        return (
+            (state["phase"] != PHASE_TERMINATED)
+            & (state["step"] < max_recalls)
+        )
+
+    def body_fn(state):
+        key = state["key"]
+        phase = state["phase"]
+
+        # Route α step: sample p_stop, then either terminate or sample
+        # a recall and drift c_ret_g.
+        def step_alpha(state, key):
+            already = state["already_mask"]
+            c_ret = state["c_ret_g"]
+            p_stop = compute_p_stop(
+                m_cf_g, c_ret, already, hp.epsilon_d, jnp,
+            )
+            key, k_stop, k_pick = jax.random.split(key, 3)
+            stop_now = jax.random.uniform(k_stop) < p_stop
+
+            # Sample recall (used only if not stopping).
+            a = activation(m_cf_g, c_ret, jnp)
+            log_p = log_softmax_masked(hp.k * a, ~already, jnp)
+            idx = jax.random.categorical(k_pick, log_p)
+
+            new_already = already.at[idx].set(True)
+            c_in = c_IN_rec_of(idx, m_fc_g, hp.gamma_fc, d, jnp, jnp.float64)
+            new_c_ret = drift_c_ret(c_ret, c_in, hp.beta_rec, jnp)
+
+            # Update recall arrays only if not stopping.
+            new_recalls = state["recalls"].at[state["step"]].set((idx + 1).astype(jnp.int32))
+            new_recall_mask = state["recall_mask"].at[state["step"]].set(True)
+
+            new_state = dict(state)
+            new_state["key"] = key
+            new_state["phase"] = jnp.where(stop_now, PHASE_TERMINATED, PHASE_ALPHA)
+            new_state["c_ret_g"] = jnp.where(stop_now, c_ret, new_c_ret)
+            new_state["already_mask"] = jnp.where(stop_now, already, new_already)
+            new_state["recalls"] = jnp.where(stop_now, state["recalls"], new_recalls)
+            new_state["recall_mask"] = jnp.where(
+                stop_now, state["recall_mask"], new_recall_mask,
+            )
+            new_state["step"] = jnp.where(stop_now, state["step"], state["step"] + 1)
+            return new_state
+
+        # Route β storyline-selection step: pick ŝ, transition to within.
+        def step_beta_select(state, key):
+            already = state["already_mask"]
+            # Update fully-exhausted: storyline s is exhausted if every
+            # in_story item is in already_mask.
+            in_story_remaining = (
+                in_story_masks & ~already[None, :]
+            )  # (K, W)
+            newly_exhausted = ~jnp.any(in_story_remaining, axis=1)
+            fully_exhausted = state["fully_exhausted"] | newly_exhausted
+
+            candidate_mask = ~fully_exhausted
+            # Exclude immediately-preceding storyline (if not already
+            # excluded by exhaustion).
+            last_s = state["last_visited_s"]
+            candidate_mask = jnp.where(
+                last_s >= 0,
+                candidate_mask.at[last_s].set(False),
+                candidate_mask,
+            )
+            # Fallback: if no candidates, allow any non-exhausted.
+            any_candidates = jnp.any(candidate_mask)
+            candidate_mask = jnp.where(
+                any_candidates, candidate_mask, ~fully_exhausted,
+            )
+            no_candidates_at_all = ~jnp.any(candidate_mask)
+
+            story_acts = m_sc @ state["c_ret_g"]
+            log_p_story = log_softmax_masked(
+                hp.k * story_acts, candidate_mask, jnp,
+            )
+            key, sub = jax.random.split(key)
+            s_hat = jax.random.categorical(sub, log_p_story)
+
+            # Set within-storyline cue: c_ret_s = M^lists_G[ŝ] (option iii).
+            new_c_ret_s = m_sc[s_hat]
+
+            new_state = dict(state)
+            new_state["key"] = key
+            new_state["phase"] = jnp.where(
+                no_candidates_at_all, PHASE_TERMINATED, PHASE_BETA_WITHIN,
+            )
+            new_state["fully_exhausted"] = fully_exhausted
+            new_state["c_ret_s"] = new_c_ret_s
+            new_state["current_s"] = s_hat.astype(jnp.int32)
+            # Record start step so we can detect zero-recall visits.
+            new_state["visit_start_step"] = state["step"]
+            return new_state
+
+        # Route β within-storyline step: sample p_stop, terminate visit
+        # or sample a recall.
+        def step_beta_within(state, key):
+            s_hat = state["current_s"]
+            in_story = in_story_masks[s_hat]
+            already = state["already_mask"]
+            keep_mask = in_story & ~already
+            no_remaining = ~jnp.any(keep_mask)
+
+            # Effective matrices.
+            wg = hp.w_global
+            m_cf_eff = (1.0 - wg) * m_cf_s[s_hat] + wg * m_cf_g
+            m_fc_eff = (1.0 - wg) * m_fc_s[s_hat] + wg * m_fc_g
+
+            p_stop = compute_p_stop(
+                m_cf_eff, state["c_ret_s"],
+                already | ~in_story, hp.epsilon_d, jnp,
+            )
+            key, k_stop, k_pick = jax.random.split(key, 3)
+            stop_now = jax.random.uniform(k_stop) < p_stop
+
+            # End-of-visit triggers: stop_now, or no_remaining.
+            visit_ends = stop_now | no_remaining
+
+            # Sample recall (used only if visit doesn't end).
+            a = activation(m_cf_eff, state["c_ret_s"], jnp)
+            log_p = log_softmax_masked(hp.k * a, keep_mask, jnp)
+            idx = jax.random.categorical(k_pick, log_p)
+
+            new_already = already.at[idx].set(True)
+            c_in_s = c_IN_rec_of(idx, m_fc_eff, hp.gamma_fc, d, jnp, jnp.float64)
+            new_c_ret_s = drift_c_ret(state["c_ret_s"], c_in_s, hp.beta_rec, jnp)
+            c_in_g = c_IN_rec_of(idx, m_fc_g, hp.gamma_fc, d, jnp, jnp.float64)
+            new_c_ret_g = drift_c_ret(state["c_ret_g"], c_in_g, hp.beta_rec, jnp)
+
+            # Record recall only if visit doesn't end.
+            new_recalls = state["recalls"].at[state["step"]].set((idx + 1).astype(jnp.int32))
+            new_recall_mask = state["recall_mask"].at[state["step"]].set(True)
+
+            # Defensive guard (mirrors numpy lines 834-835): if the
+            # visit ends with zero recalls (immediate p_stop on first
+            # iteration), mark s_hat fully exhausted to prevent the
+            # next select step from picking it again.
+            zero_recall_visit = visit_ends & (
+                state["step"] == state["visit_start_step"]
+            )
+            new_fully_exhausted = jnp.where(
+                zero_recall_visit,
+                state["fully_exhausted"].at[s_hat].set(True),
+                state["fully_exhausted"],
+            )
+
+            new_state = dict(state)
+            new_state["key"] = key
+            new_state["phase"] = jnp.where(
+                visit_ends, PHASE_BETA_SELECT, PHASE_BETA_WITHIN,
+            )
+            new_state["fully_exhausted"] = new_fully_exhausted
+            new_state["last_visited_s"] = jnp.where(
+                visit_ends, s_hat.astype(jnp.int32), state["last_visited_s"],
+            )
+            new_state["c_ret_s"] = jnp.where(visit_ends, state["c_ret_s"], new_c_ret_s)
+            new_state["c_ret_g"] = jnp.where(visit_ends, state["c_ret_g"], new_c_ret_g)
+            new_state["already_mask"] = jnp.where(
+                visit_ends, already, new_already,
+            )
+            new_state["recalls"] = jnp.where(
+                visit_ends, state["recalls"], new_recalls,
+            )
+            new_state["recall_mask"] = jnp.where(
+                visit_ends, state["recall_mask"], new_recall_mask,
+            )
+            new_state["step"] = jnp.where(
+                visit_ends, state["step"], state["step"] + 1,
+            )
+            return new_state
+
+        # Dispatch on phase via lax.switch.
+        # We use lax.switch since the phases are exclusive integer cases.
+        return jax.lax.switch(
+            phase,
+            [
+                lambda s: step_alpha(s, key),  # PHASE_ALPHA
+                lambda s: step_beta_select(s, key),  # PHASE_BETA_SELECT
+                lambda s: step_beta_within(s, key),  # PHASE_BETA_WITHIN
+                lambda s: s,  # PHASE_TERMINATED — should not occur (cond_fn excludes)
+            ],
+            state,
+        )
+
+    final_state = jax.lax.while_loop(cond_fn, body_fn, init_state)
+    return final_state["recalls"], final_state["recall_mask"]
+
+
+# --- jitted wrappers ----------------------------------------------------
+#
+# JAX cannot trace the dataclass `MSCoreHyperparams` directly across the
+# Python-level call boundary; we accept it via a positional argument and
+# rely on JAX's pytree handling of the underlying floats. The `W`, `K`,
+# `max_recalls` arguments are static (they determine array shapes), so
+# we jit with them marked static. The first call traces+compiles; later
+# calls with the same (W, K, max_recalls) reuse the cache.
+
+import functools as _functools
+
+
+def _hp_to_array(hp: MSCoreHyperparams):
+    """Pack hyperparameters into a 1-D float64 jnp array (jit-traceable)."""
+    import jax.numpy as jnp
+    return jnp.asarray([
+        hp.beta_enc, hp.beta_enc_global, hp.beta_list, hp.beta_rec,
+        hp.beta_rein, hp.gamma_fc, hp.k, hp.epsilon_d,
+        hp.lambda_reinstate, hp.tau_init, hp.w_global,
+    ], dtype=jnp.float64)
+
+
+def _array_to_hp(hp_arr) -> MSCoreHyperparams:
+    """Unpack a 1-D array into a MSCoreHyperparams dataclass (traced)."""
+    return MSCoreHyperparams(
+        beta_enc=hp_arr[0],
+        beta_enc_global=hp_arr[1],
+        beta_list=hp_arr[2],
+        beta_rec=hp_arr[3],
+        beta_rein=hp_arr[4],
+        gamma_fc=hp_arr[5],
+        k=hp_arr[6],
+        epsilon_d=hp_arr[7],
+        lambda_reinstate=hp_arr[8],
+        tau_init=hp_arr[9],
+        w_global=hp_arr[10],
+    )
+
+
+@_functools.partial(
+    __import__("jax").jit, static_argnames=("W", "K", "max_recalls"),
+)
+def _simulate_recalls_mstcm_jax_jitted(
+    hp_arr, W: int, K: int, cat_indices, key, max_recalls: int,
+):
+    """JIT entry point: takes hp as a packed jnp array."""
+    hp = _array_to_hp(hp_arr)
+    return _simulate_recalls_mstcm_jax_impl(
+        hp, W, K, cat_indices, key, max_recalls,
+    )
+
+
+def simulate_recalls_mstcm_jax(
+    hp: MSCoreHyperparams,
+    W: int,
+    K: int,
+    cat_indices,
+    key,
+    *,
+    max_recalls: int = None,
+):
+    """User-facing JAX simulator (single list/key).
+
+    Subsequent calls with the same (W, K, max_recalls) reuse the JIT cache.
+    """
+    if max_recalls is None:
+        max_recalls = 3 * W
+    hp_arr = _hp_to_array(hp)
+    return _simulate_recalls_mstcm_jax_jitted(
+        hp_arr, W, K, cat_indices, key, max_recalls,
+    )
+
+
+@_functools.partial(
+    __import__("jax").jit, static_argnames=("W", "K", "max_recalls"),
+)
+def _simulate_recalls_mstcm_jax_batch_jitted(
+    hp_arr, W: int, K: int, cat_indices_batch, keys_batch, max_recalls: int,
+):
+    """Vmapped over leading axis of (cat_indices_batch, keys_batch).
+
+    Both have leading dim N. Uses the SAME hyperparameters and W/K/max_recalls
+    for all N entries in the batch.
+    """
+    import jax
+
+    def one(cat_indices, key):
+        hp = _array_to_hp(hp_arr)
+        return _simulate_recalls_mstcm_jax_impl(
+            hp, W, K, cat_indices, key, max_recalls,
+        )
+
+    return jax.vmap(one, in_axes=(0, 0))(cat_indices_batch, keys_batch)
+
+
+def simulate_recalls_mstcm_jax_batch(
+    hp: MSCoreHyperparams,
+    W: int,
+    K: int,
+    cat_indices_batch,
+    keys_batch,
+    *,
+    max_recalls: int = None,
+):
+    """Batched JAX simulator over (cat_indices, key) pairs.
+
+    cat_indices_batch: (N, W) int32
+    keys_batch: (N, 2) PRNGKeys (one per simulation)
+    Returns:
+        recalls: (N, max_recalls) int32  (1-indexed sps; 0 = padding)
+        mask:    (N, max_recalls) bool
+    """
+    if max_recalls is None:
+        max_recalls = 3 * W
+    hp_arr = _hp_to_array(hp)
+    return _simulate_recalls_mstcm_jax_batch_jitted(
+        hp_arr, W, K, cat_indices_batch, keys_batch, max_recalls,
+    )

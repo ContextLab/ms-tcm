@@ -127,6 +127,28 @@ class ModelParameters:
     MS-TCM variant.
     """
 
+    phi_s: float = 1.0
+    """Primacy gradient scale (Polyn et al. 2009 / standard CMR).
+
+    Used ONLY in the standard CMR baseline (`_likelihood_core_cmr.py`).
+    Defines the per-position primacy multiplier φ_l = φ_s · exp(−φ_d · (l−1)) + 1
+    that scales M^CF_exp's columns at retrieval (Polyn et al. 2009 Eq 5),
+    boosting activations of items at early serial positions to produce
+    primacy in the SPC.
+
+    NOT used in C&Z 2025 or MS-TCM — those models replace the primacy
+    gradient with hierarchical retrieval / storyline-init mechanisms.
+    Preserved at default (1.0, no boost above baseline) when those
+    models are active.
+    """
+
+    phi_d: float = 1.0
+    """Primacy gradient decay rate (Polyn et al. 2009 / standard CMR).
+
+    Companion to φ_s. Larger φ_d → faster decay of the primacy boost
+    across serial positions. Polyn et al. 2009 Table 1 fit value: 0.97.
+    """
+
     w_global: float = 0.0
     """Cross-storyline mixing weight at retrieval — NEW in MS-TCM (this work).
 

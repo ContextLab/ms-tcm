@@ -28,6 +28,7 @@ import pyarrow as pa
 
 from ms_tcm import Dataset, load_frfr_category
 from ms_tcm._likelihood_core import simulate_recalls
+from ms_tcm._likelihood_core_cmr import simulate_recalls_cmr
 from ms_tcm._likelihood_core_mstcm import simulate_recalls_mstcm
 from ms_tcm.params import ModelParameters
 
@@ -76,16 +77,19 @@ def _load_fitted_params(
         tau_init=0.0,
         paradigm="free_recall",
     )
+    metric = summary.get("log_likelihood", summary.get("rmse"))
     return (
         params,
         "C&Z 2025 (MLE)",
-        float(summary["log_likelihood"]),
+        float(metric) if metric is not None else None,
     )
 
 
 def _load_mstcm_fitted_params(
-    fit_path: Path = Path("data/processed/fits/mstcm_frfr/fit_summary.json"),
+    fit_path: Path | None = None,
 ) -> tuple[ModelParameters, str, float | None] | None:
+    if fit_path is None:
+        fit_path = Path("data/processed/fits/mstcm_frfr/fit_summary.json")
     """Load MS-TCM MLE parameters; return None if no fit summary exists."""
     if not fit_path.exists():
         return None
@@ -112,26 +116,53 @@ def _load_mstcm_fitted_params(
         w_global=w_global,
         paradigm="free_recall",
     )
+    metric = summary.get("log_likelihood", summary.get("rmse"))
     return (
         params,
         "MS-TCM (MLE)",
-        float(summary["log_likelihood"]),
+        float(metric) if metric is not None else None,
     )
+
+
+def _load_cmr_fitted_params(
+    fit_path: Path = Path("data/processed/fits/cmr_curves_frfr/fit_summary.json"),
+) -> tuple[ModelParameters, str, float | None] | None:
+    """Load Polyn 2009 standard CMR MLE parameters; return None if missing."""
+    if not fit_path.exists():
+        return None
+    summary = json.loads(fit_path.read_text())
+    pp = summary["parameters"]
+    params = ModelParameters(
+        beta_enc=pp["beta_enc"],
+        beta_story=pp.get("beta_story", pp["beta_enc"] * 0.5),  # unused
+        gamma_fc=pp["gamma_fc"],
+        k=pp["k"],
+        beta_rec=pp["beta_rec"],
+        epsilon_d=pp["epsilon_d"],
+        beta_rein=pp.get("beta_rein", 0.0),
+        phi_s=pp["phi_s"],
+        phi_d=pp["phi_d"],
+        lambda_reinstate=0.0, tau_init=0.0, w_global=0.0,
+        paradigm="free_recall",
+    )
+    # Curve fits report rmse, not log_likelihood. Accept either key.
+    metric = summary.get("log_likelihood", summary.get("rmse"))
+    return (params, "Polyn 2009 CMR (MLE)", float(metric) if metric is not None else None)
 
 
 def _simulate_dataset(ds: Dataset, params: ModelParameters, *,
                       n_seeds: int, master_seed: int,
-                      use_mstcm: bool = False) -> Dataset:
+                      model_kind: str = "cz") -> Dataset:
     """Sample synthetic recalls for every (participant, list) in ``ds``.
 
     Each (participant, list) is replicated ``n_seeds`` times with distinct
     pseudo-participant ids so the downstream curve estimators see
     N×n_seeds independent simulated lists.
 
-    When ``use_mstcm=False`` the C&Z sampler runs (single-storyline,
-    ignores category labels). When ``use_mstcm=True`` the MS-TCM sampler
-    runs with per-list cat_indices derived from the ``category`` column
-    (one storyline per unique category in order of first appearance).
+    ``model_kind`` selects the simulator: ``"cz"`` (single-storyline
+    hierarchical, ignores category), ``"mstcm"`` (multi-storyline with
+    cat_indices from the category column), or ``"cmr"`` (Polyn 2009
+    standard CMR, ignores category).
     """
     pdf = ds.presented.to_pandas()
     keys = sorted(set(zip(pdf["participant"].tolist(), pdf["list"].tolist())))
@@ -154,7 +185,7 @@ def _simulate_dataset(ds: Dataset, params: ModelParameters, *,
                 + int(part) * 37 + int(lst),
             )
 
-            if use_mstcm:
+            if model_kind == "mstcm":
                 # Build cat_indices from the category column.
                 cat_to_idx = {}
                 cat_seq = sub_pres["category"].tolist()
@@ -169,8 +200,12 @@ def _simulate_dataset(ds: Dataset, params: ModelParameters, *,
                     params, W=W, K=K,
                     cat_indices=cat_indices, rng=rng,
                 )
-            else:
+            elif model_kind == "cmr":
+                recalls = simulate_recalls_cmr(params, W=W, rng=rng)
+            elif model_kind == "cz":
                 recalls = simulate_recalls(params, W=W, rng=rng)
+            else:
+                raise ValueError(f"unknown model_kind: {model_kind!r}")
 
             for out_pos, sp in enumerate(recalls, start=1):
                 word_row = sub_pres[sub_pres["serial_position"] == sp].iloc[0]
@@ -198,7 +233,7 @@ def _simulate_dataset(ds: Dataset, params: ModelParameters, *,
 
 def _draw_band(ds: Dataset, params: ModelParameters, *,
                n_draws: int, seed: int, observe_fn,
-               use_mstcm: bool = False):
+               model_kind: str = "cz"):
     """Compute (median, lo, hi) percentile band for a per-dataset summary.
 
     For each of ``n_draws`` independent simulations of the full dataset,
@@ -209,7 +244,7 @@ def _draw_band(ds: Dataset, params: ModelParameters, *,
     for d in range(n_draws):
         ds_sim = _simulate_dataset(
             ds, params, n_seeds=1, master_seed=seed + d,
-            use_mstcm=use_mstcm,
+            model_kind=model_kind,
         )
         curves.append(observe_fn(ds_sim))
     arr = np.stack(curves, axis=0)
@@ -310,7 +345,13 @@ def main() -> int:
     if args.use_table_1:
         params, label, ll = CZ_TABLE_1, "C&Z 2025 (Table 1)", None
     else:
-        params, label, ll = _load_fitted_params(Path(args.fit_path))
+        # Prefer the curve-fit summary; fall back to LL fit; finally
+        # to whatever path the caller passed via --fit-path.
+        cz_curve_path = Path("data/processed/fits/cz_curves_frfr/fit_summary.json")
+        if cz_curve_path.exists():
+            params, label, ll = _load_fitted_params(cz_curve_path)
+        else:
+            params, label, ll = _load_fitted_params(Path(args.fit_path))
 
     print(f"Using parameters: {label}")
     if ll is not None:
@@ -322,13 +363,22 @@ def main() -> int:
         )
         print(f"  {name} = {val:.4f}")
 
-    # Try to load MS-TCM fit too.
-    mstcm_loaded = _load_mstcm_fitted_params()
+    # Try to load MS-TCM fit too. Prefer the curve-fit summary (the
+    # newer fitting objective in this work; see fit_mstcm_curves.py)
+    # over the older trial-LL fit. Fall back to the LL fit if curves
+    # are missing.
+    mstcm_curve_path = Path("data/processed/fits/mstcm_curves_frfr/fit_summary.json")
+    mstcm_ll_path = Path("data/processed/fits/mstcm_frfr/fit_summary.json")
+    mstcm_loaded = (
+        _load_mstcm_fitted_params(mstcm_curve_path)
+        if mstcm_curve_path.exists()
+        else _load_mstcm_fitted_params(mstcm_ll_path)
+    )
     if mstcm_loaded is not None:
         params_mstcm, label_mstcm, ll_mstcm = mstcm_loaded
         print(f"\nUsing MS-TCM parameters: {label_mstcm}")
         if ll_mstcm is not None:
-            print(f"  fit log-likelihood: {ll_mstcm:.2f}")
+            print(f"  fit log-likelihood / rmse: {ll_mstcm:.4f}")
         for name in ("beta_enc", "beta_list", "gamma_fc", "k", "beta_rec",
                      "epsilon_d", "beta_rein", "lambda_reinstate", "tau_init"):
             val = getattr(params_mstcm, name) if hasattr(
@@ -337,6 +387,20 @@ def main() -> int:
             print(f"  {name} = {val:.4f}")
     else:
         params_mstcm = label_mstcm = ll_mstcm = None
+
+    # Try to load Polyn 2009 standard CMR curve fit.
+    cmr_loaded = _load_cmr_fitted_params()
+    if cmr_loaded is not None:
+        params_cmr, label_cmr, ll_cmr = cmr_loaded
+        print(f"\nUsing Polyn CMR parameters: {label_cmr}")
+        if ll_cmr is not None:
+            print(f"  fit metric: {ll_cmr:.4f}")
+        for name in ("beta_enc", "beta_rec", "gamma_fc", "k", "epsilon_d",
+                     "phi_s", "phi_d"):
+            val = getattr(params_cmr, name)
+            print(f"  {name} = {val:.4f}")
+    else:
+        params_cmr = label_cmr = ll_cmr = None
 
     # Split FRFR-category into early (lists 0-7) vs late (lists 8-15).
     # The two halves have systematically different category structure
@@ -389,27 +453,45 @@ def main() -> int:
                 "spc": _draw_band(ds_half, params_mstcm, n_draws=args.n_draws,
                                   seed=args.seed,
                                   observe_fn=serial_position.observed,
-                                  use_mstcm=True),
+                                  model_kind="mstcm"),
                 "pfr": _draw_band(ds_half, params_mstcm, n_draws=args.n_draws,
                                   seed=args.seed, observe_fn=pfr.observed,
-                                  use_mstcm=True),
+                                  model_kind="mstcm"),
                 "crp": _draw_band(ds_half, params_mstcm, n_draws=args.n_draws,
                                   seed=args.seed, observe_fn=lag_crp.observed,
-                                  use_mstcm=True),
+                                  model_kind="mstcm"),
             }
         else:
             band_mstcm = None
+        if cmr_loaded is not None:
+            print(f"Drawing {args.n_draws} synthetic datasets via Polyn CMR ({half_name})...")
+            band_cmr = {
+                "spc": _draw_band(ds_half, params_cmr, n_draws=args.n_draws,
+                                  seed=args.seed,
+                                  observe_fn=serial_position.observed,
+                                  model_kind="cmr"),
+                "pfr": _draw_band(ds_half, params_cmr, n_draws=args.n_draws,
+                                  seed=args.seed, observe_fn=pfr.observed,
+                                  model_kind="cmr"),
+                "crp": _draw_band(ds_half, params_cmr, n_draws=args.n_draws,
+                                  seed=args.seed, observe_fn=lag_crp.observed,
+                                  model_kind="cmr"),
+            }
+        else:
+            band_cmr = None
         rows.append({
             "half_label": half_label,
             "obs": obs,
             "cz": band_cz,
             "mstcm": band_mstcm,
+            "cmr": band_cmr,
         })
 
     # --- Two-row figure: row 0 = early lists, row 1 = late lists ---
     fig, axes = plt.subplots(2, 3, figsize=(11, 6.4), sharex=False)
     positions = np.arange(1, W + 1)
-    cz_color = "#d62728"        # red — C&Z baseline
+    cmr_color = "#2ca02c"       # green — Polyn 2009 standard CMR
+    cz_color = "#d62728"        # red — C&Z 2025 hierarchical
     mstcm_color = "#1f77b4"     # blue — MS-TCM
     obs_color = "black"
 
@@ -430,6 +512,7 @@ def main() -> int:
         obs = row_info["obs"]
         band_cz = row_info["cz"]
         band_mstcm = row_info["mstcm"]
+        band_cmr = row_info.get("cmr")
         is_top_row = (row_idx == 0)
 
         # --- Column 0: pFR ---
@@ -440,6 +523,11 @@ def main() -> int:
                 markersize=3.5, linewidth=1.0)
         ax.fill_between(positions, lo_o, hi_o,
                         color=obs_color, alpha=0.15, linewidth=0)
+        if band_cmr is not None:
+            m, lo, hi = band_cmr["pfr"]
+            ax.plot(positions, m, ":", color=cmr_color,
+                    label=label_cmr, linewidth=1.0)
+            ax.fill_between(positions, lo, hi, color=cmr_color, alpha=0.15)
         m, lo, hi = band_cz["pfr"]
         ax.plot(positions, m, "--", color=cz_color,
                 label=label, linewidth=1.0)
@@ -471,6 +559,15 @@ def main() -> int:
                 markersize=3.5, linewidth=1.0)
         ax.fill_between(lags_pos, lo_o[pos_keep], hi_o[pos_keep],
                         color=obs_color, alpha=0.15, linewidth=0)
+
+        if band_cmr is not None:
+            m, lo, hi = band_cmr["crp"]
+            ax.plot(lags_neg, m[neg_keep], ":", color=cmr_color, linewidth=1.0)
+            ax.fill_between(lags_neg, lo[neg_keep], hi[neg_keep],
+                            color=cmr_color, alpha=0.15)
+            ax.plot(lags_pos, m[pos_keep], ":", color=cmr_color, linewidth=1.0)
+            ax.fill_between(lags_pos, lo[pos_keep], hi[pos_keep],
+                            color=cmr_color, alpha=0.15)
 
         m, lo, hi = band_cz["crp"]
         ax.plot(lags_neg, m[neg_keep], "--", color=cz_color, linewidth=1.0)
@@ -507,6 +604,10 @@ def main() -> int:
                 markersize=3.5, linewidth=1.0)
         ax.fill_between(positions, lo_o, hi_o,
                         color=obs_color, alpha=0.15, linewidth=0)
+        if band_cmr is not None:
+            m, lo, hi = band_cmr["spc"]
+            ax.plot(positions, m, ":", color=cmr_color, linewidth=1.0)
+            ax.fill_between(positions, lo, hi, color=cmr_color, alpha=0.15)
         m, lo, hi = band_cz["spc"]
         ax.plot(positions, m, "--", color=cz_color, linewidth=1.0)
         ax.fill_between(positions, lo, hi, color=cz_color, alpha=0.2)
