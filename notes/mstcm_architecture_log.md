@@ -928,12 +928,51 @@ both mini-primacy AND mini-recency, which matches the observed
 scallops where each category boundary produces enhanced recall of
 both the first and last items.
 
-**The remaining puzzle (still unsolved)**: pFR(sp=1) primacy spike of
-~0.27 in BOTH halves. The model gets the secondary recency-storyline
-peak (sp=13-16) and produces some mass at sp=1, but the magnitude is
-still wrong. The storyline-selection mechanism (softmax over M^SC ·
-c_global_end) systematically prefers the most-recent storyline because
-its M^SC entry was set most recently. To put dominant mass at the
-FIRST-encoded storyline would require a mechanism we haven't
-identified yet that doesn't violate the no-primacy-gradient principle.
-This is captured for future iterations.
+**The remaining puzzles** (still unsolved after Iteration 4):
+
+1. **pFR(sp=1) primacy spike** of ~0.27 in BOTH halves. The model gets
+   the secondary recency-storyline peak (sp=13-16) and produces some
+   mass at sp=1, but the magnitude is still wrong. The storyline-
+   selection mechanism (softmax over M^SC · c_global_end) systematically
+   prefers the most-recent storyline because its M^SC entry was set
+   most recently. To put dominant mass at the FIRST-encoded storyline
+   would require a mechanism we haven't identified yet that doesn't
+   violate the no-primacy-gradient principle.
+
+2. **SPC magnitude is too high** in both halves: the predicted SPC
+   tracks the scallop SHAPE well now (under option iii) but the model
+   predicts P(recall) values that are uniformly elevated relative to
+   observed, especially in the middle positions. Possible causes:
+   (a) recalls-per-list mismatch (model recalls more items than
+   observed); (b) stopping rule fires too rarely; (c) the LL fitter
+   weights per-recall identity terms over the marginal recall-count
+   distribution, so SPC is a downstream consequence not directly
+   optimized.
+
+3. **Mid-position scallop is washed out**: the scallop is more visible
+   at storyline boundaries near the LIST boundaries (sp=1 and sp=13)
+   than at the inner storyline boundaries (sp=5, sp=9). May be an
+   artifact of (2) — overall SPC elevation washes out the
+   middle-storyline peaks.
+
+### Note on the fitting objective (relevant for issues 2-3)
+
+The current fitter (`fit_mstcm_to_frfr.py`) optimizes the **trial-level
+recall log-likelihood** — for each (participant, list), the LL of the
+observed recall sequence under the model. SPC, pFR, and lag-CRP are
+NOT directly part of the loss; they're marginals of the recall-set
+distribution that the LL implicitly covers. Trial-level LL is the
+maximum-likelihood-of-observed-data criterion (theoretically right,
+gives valid AIC/BIC), but it weights the curves implicitly: pFR
+contributes one log-prob per list (the first recall), lag-CRP
+contributes one log-prob per transition, SPC isn't counted directly.
+
+If observed and predicted SPC differ by a constant offset, that
+reflects a recall-count mismatch (controlled by ε_d's stopping rule)
+that the trial-level LL only weakly penalizes. C&Z 2025 actually fit
+via Bayesian optimization on RMSE between simulated and observed
+curves (their Methods §"Model Fitting and Simulations"), trading
+per-recall identity precision for marginal-curve fidelity.
+
+**Open question for Iteration 5**: should we switch to a curve-matching
+loss to better fit the SPC magnitude? Discussed but not yet decided.
