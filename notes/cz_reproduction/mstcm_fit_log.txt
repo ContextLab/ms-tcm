@@ -1,21 +1,21 @@
 # Fit MS-TCM MS-TCM to frfr_category (n_restarts=5, seed=42)
-NLL at init = 12988.6193
-restart 0: nll0=12988.6193  nll*=10557.6146  converged=True  iters=32  elapsed=242.1s
-restart 1: nll0=14973.9820  nll*=10557.6144  converged=True  iters=33  elapsed=250.7s
-restart 2: nll0=13032.0184  nll*=10557.6146  converged=True  iters=34  elapsed=248.1s
-restart 3: nll0=12329.3281  nll*=10557.6145  converged=True  iters=36  elapsed=253.5s
-restart 4: nll0=13643.0900  nll*=10557.6145  converged=True  iters=35  elapsed=231.0s
-best: nll=10557.6144  ll=-10557.6144  restart=1  total fit time=1227.9s
+NLL at init = 13503.4064
+restart 0: nll0=13503.4064  nll*=11001.9774  converged=True  iters=31  elapsed=246.4s
+restart 1: nll0=15570.8214  nll*=11001.9761  converged=True  iters=33  elapsed=263.7s
+restart 2: nll0=13670.1913  nll*=11001.9761  converged=True  iters=34  elapsed=250.1s
+restart 3: nll0=12877.8329  nll*=11001.9766  converged=True  iters=33  elapsed=255.8s
+restart 4: nll0=13982.7815  nll*=11001.9760  converged=True  iters=35  elapsed=262.5s
+best: nll=11001.9760  ll=-11001.9760  restart=4  total fit time=1281.4s
 
 MLE parameters:
-  beta_enc = 0.9841
-  beta_enc_global = 0.7813
-  beta_story = 0.2891
-  gamma_fc = 0.7304
-  k = 3.1197
-  beta_rec = 0.9277
-  epsilon_d = 2.8886
-  beta_rein = 0.3108
-  lambda_reinstate = 0.4684
-  tau_init = 0.5874
-  w_global = 0.2798
+  beta_enc = 0.8896
+  beta_enc_global = 0.7504
+  beta_story = 0.1592
+  gamma_fc = 0.6602
+  k = 3.2376
+  beta_rec = 0.8671
+  epsilon_d = 2.3766
+  beta_rein = 0.3573
+  lambda_reinstate = 0.5738
+  tau_init = 0.2398
+  w_global = 0.1570

@@ -1368,8 +1368,40 @@ final route-β termination.
   be re-fitted because the new mechanism makes p_stop fire MORE
   aggressively.
 
-**Refit in progress**: trial-LL refit launched
-(`fit_mstcm_to_frfr.py --n-restarts 5 --seed 42`). Initial NLL at
-old defaults: 13503.4 (higher than before because the old optimum
-relied on never-stop-route-β to maximize cumulative LL). The
-optimizer should find a new minimum with smaller ε_d.
+**Refit results** (trial-LL, n_restarts=5, seed=42, 21 min):
+
+New MS-TCM MLE:
+- τ = 0.24 (was 0.59) — much less route β use; the new stopping cost
+  pushes the optimizer toward route α
+- λ = 0.57 (was 0.47)
+- w_global = 0.16 (was 0.28)
+- k = 3.24 (was 3.12)
+- ε_d = 2.38 (was 2.89)
+- LL = -11001.98 (was -10557.61)
+
+Mean recalls/list under new MLE: 8.46 (sd 2.95). Observed: 9.95.
+Now slightly under-predicts (vs the old 11.83 over-predict). The
+SPC over-prediction in the middle positions is RESOLVED — both
+halves of FRFR-category now show MS-TCM's SPC sitting close to
+observed (early lists slightly above, late lists slightly below).
+
+**Note on LL comparability**: the new MS-TCM has additional LL terms
+(per-visit `log(1-p_stop_global)` + final `log p_stop_global`) that
+the old model lacked, so the new -11001.98 LL is NOT directly
+comparable to the old -10557.61 LL. Within iteration 5e:
+
+| Model | LL | Mean recalls/list |
+|-|-|-|
+| HCMR (C&Z) | -10699.82 | 9.86 |
+| MS-TCM (with route-β stop) | -11001.98 | 8.46 |
+| Polyn CMR | -11233.52 | 8.84 |
+
+**Commentary**: HCMR now has the best trial-LL on FRFR-category among
+the three models. MS-TCM's added flexibility (route β + storyline
+mechanisms) doesn't pay off under trial-LL once the route-β over-
+recall loophole is closed — the data simply doesn't strongly demand
+storyline-mediated retrieval beyond what the C&Z hierarchical fallback
+provides. This is consistent with FRFR-category being a free-recall
+paradigm (where pFR primacy is the dominant signal); the storyline
+mechanism is more relevant to the cued-recall task in Xu, Duncan, &
+Manning (2026) where MS-TCM was originally motivated.
