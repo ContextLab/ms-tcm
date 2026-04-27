@@ -1,9 +1,11 @@
-# Fit MS-TCM MS-TCM to frfr_category (n_restarts=3, seed=42)
+# Fit MS-TCM MS-TCM to frfr_category (n_restarts=5, seed=42)
 NLL at init = 12988.6193
-restart 0: nll0=12988.6193  nll*=10557.6146  converged=True  iters=32  elapsed=230.8s
-restart 1: nll0=14973.9820  nll*=10557.6144  converged=True  iters=33  elapsed=254.6s
-restart 2: nll0=13032.0184  nll*=10557.6146  converged=True  iters=34  elapsed=249.0s
-best: nll=10557.6144  ll=-10557.6144  restart=1  total fit time=736.1s
+restart 0: nll0=12988.6193  nll*=10557.6146  converged=True  iters=32  elapsed=242.1s
+restart 1: nll0=14973.9820  nll*=10557.6144  converged=True  iters=33  elapsed=250.7s
+restart 2: nll0=13032.0184  nll*=10557.6146  converged=True  iters=34  elapsed=248.1s
+restart 3: nll0=12329.3281  nll*=10557.6145  converged=True  iters=36  elapsed=253.5s
+restart 4: nll0=13643.0900  nll*=10557.6145  converged=True  iters=35  elapsed=231.0s
+best: nll=10557.6144  ll=-10557.6144  restart=1  total fit time=1227.9s
 
 MLE parameters:
   beta_enc = 0.9841

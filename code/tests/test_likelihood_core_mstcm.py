@@ -217,6 +217,12 @@ def _oracle_mstcm_ll(p, W, K, cat_indices, recall_sps, recall_mask):
         already_b = np.zeros(W, dtype=bool)
         last_s = -1
         for s_hat, rec_indices in visits:
+            # Route-β-level p_stop check: log(1 - p_stop_global) before
+            # entering each visit. Mirrors `_ll_route_beta_numpy`'s
+            # global stopping mechanism (Iteration 5e).
+            ps_global = _p_stop(m_cf_g, c_ret_g, already_b, eps_d)
+            cum_beta += float(np.log(max(1.0 - ps_global, 1e-300)))
+
             # Storyline selection log-prob.
             cand_mask = np.ones(K, dtype=bool)
             if last_s >= 0:
@@ -262,6 +268,10 @@ def _oracle_mstcm_ll(p, W, K, cat_indices, recall_sps, recall_mask):
             ps_end = _p_stop(m_cf_eff, c_ret_s, already_for_stop, eps_d)
             cum_beta += float(np.log(max(ps_end, 1e-300)))
             last_s = s_hat
+
+        # Final route-β termination LL: log p_stop_global at end of recall.
+        ps_global_final = _p_stop(m_cf_g, c_ret_g, already_b, eps_d)
+        cum_beta += float(np.log(max(ps_global_final, 1e-300)))
 
     # Mixture.
     log_tau = float(np.log(max(tau, 1e-300)))

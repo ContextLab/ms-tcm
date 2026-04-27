@@ -552,6 +552,18 @@ def _ll_route_beta_numpy(
     last_visited_s = -1  # exclusion mask (single int, OQ2 resolution)
 
     for visit_idx, (s_hat, rec_indices) in enumerate(visits):
+        # --- Global p_stop check (route β level) ---
+        # Before entering each visit (including the first), the model
+        # decides whether to TERMINATE route β based on global activations.
+        # This mirrors C&Z's per-recall stopping rule but at the storyline-
+        # selection level. Without this, route β was forced to exhaust all
+        # K storylines, producing systematic over-recall (mean 14 vs
+        # observed 10). See arch log Iteration 5e.
+        p_stop_global = float(compute_p_stop(
+            m_cf_g, c_ret_g, already_mask, hp.epsilon_d, xp,
+        ))
+        cum_ll += float(xp.log(max(1.0 - p_stop_global, 1e-300)))
+
         # --- Storyline-selection log-prob ---
         # Build candidate mask: exclude `last_visited_s` only.
         candidate_mask = xp.ones(K, dtype=bool)
@@ -637,6 +649,15 @@ def _ll_route_beta_numpy(
         # Update exclusion: only the just-finished storyline is excluded
         # for the NEXT global selection.
         last_visited_s = s_hat
+
+    # --- Final route-β termination LL ---
+    # After the last observed visit, the model must have decided to STOP
+    # route β globally (rather than entering another visit). This is the
+    # closing match for the per-visit log(1 - p_stop_global) terms above.
+    p_stop_global_final = float(compute_p_stop(
+        m_cf_g, c_ret_g, already_mask, hp.epsilon_d, xp,
+    ))
+    cum_ll += float(xp.log(max(p_stop_global_final, 1e-300)))
 
     return cum_ll
 
@@ -759,6 +780,16 @@ def simulate_recalls_mstcm(
             if not fully_exhausted[s]:
                 if (in_story_masks[s] & ~already_mask).sum() == 0:
                     fully_exhausted[s] = True
+
+        # Global p_stop check (route β level). Mirrors the LL term
+        # `log(1 - p_stop_global)` added in `_ll_route_beta_numpy`. Without
+        # this, route β was forced to exhaust all K storylines, producing
+        # systematic over-recall. See arch log Iteration 5e.
+        p_stop_global = float(compute_p_stop(
+            m_cf_g, c_ret_g, already_mask, hp.epsilon_d, np,
+        ))
+        if rng.random() < p_stop_global:
+            break  # route β terminates globally.
 
         # Storyline selection: exclude fully-exhausted AND last-visited.
         candidate_mask = np.ones(K, dtype=bool)
@@ -991,6 +1022,16 @@ def _simulate_recalls_mstcm_jax_impl(
         # Route β storyline-selection step: pick ŝ, transition to within.
         def step_beta_select(state, key):
             already = state["already_mask"]
+            # Global p_stop check (route β level). Mirrors the LL term
+            # `log(1 - p_stop_global)` added in `_ll_route_beta_numpy`.
+            # Without this, route β was forced to exhaust all K
+            # storylines, producing systematic over-recall.
+            p_stop_global = compute_p_stop(
+                m_cf_g, state["c_ret_g"], already, hp.epsilon_d, jnp,
+            )
+            key, k_stop = jax.random.split(key)
+            stop_global = jax.random.uniform(k_stop) < p_stop_global
+
             # Update fully-exhausted: storyline s is exhausted if every
             # in_story item is in already_mask.
             in_story_remaining = (
@@ -1025,10 +1066,13 @@ def _simulate_recalls_mstcm_jax_impl(
             # Set within-storyline cue: c_ret_s = M^lists_G[ŝ] (option iii).
             new_c_ret_s = m_sc[s_hat]
 
+            # Terminate route β if global stop fired OR no candidates remain.
+            terminate = stop_global | no_candidates_at_all
+
             new_state = dict(state)
             new_state["key"] = key
             new_state["phase"] = jnp.where(
-                no_candidates_at_all, PHASE_TERMINATED, PHASE_BETA_WITHIN,
+                terminate, PHASE_TERMINATED, PHASE_BETA_WITHIN,
             )
             new_state["fully_exhausted"] = fully_exhausted
             new_state["c_ret_s"] = new_c_ret_s

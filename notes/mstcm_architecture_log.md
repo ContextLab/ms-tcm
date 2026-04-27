@@ -1319,3 +1319,57 @@ structure, weaker primacy in pFR) where this isn't a problem. The
 "reverse primacy" in our fitted CMR is the LL optimizer's best
 compromise given a model that doesn't have a primacy-initiation
 mechanism (which C&Z's two-phase and MS-TCM's τ-route both have).
+
+### Iteration 5e: route-β-level stopping for MS-TCM (2026-04-27)
+
+**Problem**: Iter 5d diagnostic showed MS-TCM over-recalls under route β.
+At τ=1 (forced route β): 14.02 recalls/list. Route β cycled through all
+K storylines until each was fully exhausted; the only termination
+condition was "all storylines exhausted." This is a structural model
+issue: the per-storyline-visit p_stop only stops the CURRENT storyline,
+not route β as a whole.
+
+**Fix**: add a global p_stop check at the storyline-selection step,
+mirroring C&Z's per-recall stopping rule but at the route-β level.
+
+Generative process change (route β):
+1. Initial: c_ret_g = c_global_end, already_mask = ∅, last_visited_s = -1
+2. Loop:
+   - **NEW: Global stop check** — sample
+     `p_stop_global = compute_p_stop(M^CF_G, c_ret_g, already_mask, ε_d)`.
+     If fires → terminate route β.
+   - (existing) Pick storyline ŝ via softmax over candidates.
+   - (existing) Within-storyline visit.
+   - (existing) End-of-visit p_stop.
+3. Repeat until route β terminates.
+
+LL change: each visit's contribution gains `log(1 - p_stop_global)`
+(at the visit start, using the GLOBAL m_cf_g and the CUMULATIVE
+already_mask). After the last visit, add `log p_stop_global` for the
+final route-β termination.
+
+**Implementation** (code/ms_tcm/_likelihood_core_mstcm.py):
+- `_ll_route_beta_numpy`: added `log(1 - p_stop_global)` at the top of
+  each visit loop iteration; added final `log p_stop_global` after
+  the loop.
+- `simulate_recalls_mstcm` (numpy): added `if rng.random() < p_stop_global:
+  break` at the top of the outer while loop.
+- `step_beta_select` (JAX): added `stop_global` flag; phase transitions
+  to PHASE_TERMINATED if `stop_global | no_candidates_at_all`.
+- Oracle test (`test_likelihood_core_mstcm.py::_oracle_mstcm_ll`):
+  parallel additions to keep the analytic-vs-core comparison correct.
+
+**Verification**:
+- 71/71 oracle tests pass after the LL update.
+- Numpy vs JAX simulator agreement at C&Z defaults: 5.97 vs 6.11 mean
+  recalls (within MC noise).
+- Mean recalls under MS-TCM with new route-β-stopping (using OLD MLE
+  parameters): 5.97 — clearly under-recalls. As expected: ε_d needs to
+  be re-fitted because the new mechanism makes p_stop fire MORE
+  aggressively.
+
+**Refit in progress**: trial-LL refit launched
+(`fit_mstcm_to_frfr.py --n-restarts 5 --seed 42`). Initial NLL at
+old defaults: 13503.4 (higher than before because the old optimum
+relied on never-stop-route-β to maximize cumulative LL). The
+optimizer should find a new minimum with smaller ε_d.
