@@ -1405,3 +1405,74 @@ provides. This is consistent with FRFR-category being a free-recall
 paradigm (where pFR primacy is the dominant signal); the storyline
 mechanism is more relevant to the cued-recall task in Xu, Duncan, &
 Manning (2026) where MS-TCM was originally motivated.
+
+### Iteration 5f: CMR primacy implementation review (2026-04-27)
+
+**User concern**: "There's no primacy in either CMR or MS-TCM. CMR
+empirically does show primacy in the original paper. Either something
+is implemented incorrectly, or this method of fitting has issues.
+Carefully review Polyn 2009 against our implementation."
+
+**Review of Polyn 2009 equations vs our `_likelihood_core_cmr.py`**:
+
+- Eq 4: `ΔM^FC_exp = c_i f_i^T` — our encoding stores `c_i` (pre-drift)
+  in column i of M^FC_exp ✓
+- Eq 5: `M^FC = (1-γ_FC) M^FC_pre + γ_FC ΔM^FC_exp` — applied via
+  `c_IN_rec_of` at retrieval ✓
+- Eq 6: `ΔM^CF_exp = φ_i · L^CF · f_i · c_i^T` — Polyn applies φ at
+  encoding; we apply equivalently at retrieval as
+  `m_cf_eff = m_cf_exp * phi[:, None]`. Mathematically equivalent
+  because M^CF_pre = 0 (no pre-experimental temporal-context-to-item
+  associations) so `M^CF = γ_FC · ΔM^CF_exp` and γ_FC is absorbed into
+  k (the activation scale parameter) ✓
+- Eq 7: `L^CF` (4 sub-components for source/temporal): for temporal-only
+  CMR (our use case), `L^CF_tw = 1` and source components don't apply ✓
+- Eq 8: `φ_i = φ_s · exp(-φ_d · (i-1)) + 1` — `primacy_gradient` ✓
+- Eq 9: `f^IN = M^CF · c_i` — input to accumulators
+- Eq 10: **Usher-McClelland leaky competitive accumulator** — Polyn's
+  decision rule. We use **softmax + p_stop** instead (C&Z's choice for
+  closed-form trial-LL). This is the major formulation difference.
+
+**Verification: at Polyn 2009 M62 fit values, our CMR shows primacy**:
+
+```
+Config:                      mean | SPC sp1 sp2 sp3 sp8 sp14 sp15 sp16 | pFR sp1 sp16
+Polyn 2009 (φ_s=5.39, φ_d=1.41,  9.90 | 0.67 0.65 0.55 0.50 0.79 0.85 0.94 | 0.009 0.634
+   ε_d=5.0, others Polyn)
+Our FRFR-cat fit (φ_s=1.17,      8.85 | 0.46 0.54 0.56 0.53 0.59 0.63 0.67 | 0.031 0.253
+   φ_d=0.48, ε_d=2.49)
+Observed FRFR-cat:               9.95 | 0.75 0.72 0.63 0.58 0.61 0.65 0.67 | 0.273 0.171
+```
+
+**Implementation is correct.** With Polyn 2009's published fit values
+(φ_s=5.39, φ_d=1.41, ε_d=5.0), our CMR produces the classic bowed SPC
+with primacy peak at sp 1 (0.67) and recency at sp 16 (0.94).
+
+**Why our trial-LL fit chose weak primacy**: at Polyn-style strong-φ
+parameters:
+1. **Over-recency**: SPC sp 16 = 0.94, vs observed 0.67. Severe
+   over-prediction at end of list.
+2. **pFR mismatch persists**: pFR sp 1 = 0.009 vs observed 0.273.
+   Strong φ doesn't help pFR primacy because at recall onset,
+   c_ret = c_item_end has a near-zero e_start component
+   (~0.0015 after 16 drifts). Activation `a_1 = φ_1 · c_ret[0]` is
+   tiny regardless of φ_1.
+
+The optimizer reduces φ to (a) shrink over-recency and (b) flatten
+pFR (which it can't fix). The cost is reverse-primacy in SPC.
+
+**Fundamental limitation**: standard single-phase CMR cannot fit
+data with strong pFR primacy. The model has only one cue at recall
+onset (c_ret = c_item_end), and that cue has near-zero overlap with
+sp 1's pre-encoding context. Polyn 2009 fitted Murdock 1962, where
+pFR primacy is much weaker than in FRFR-category (no category
+structure inducing first-recall biases).
+
+**No code change required.** The figure caption / paper text should
+note that "CMR's flat SPC on FRFR-category reflects a known
+limitation of single-phase CMR for category-organized data with
+strong pFR primacy; the figure of merit is whether MS-TCM's
+storyline-init route (τ) and HCMR's two-phase retrieval can resolve
+this." Both DO, by construction — though τ-route was not heavily
+recruited in the trial-LL MS-TCM fit (τ=0.24 after route-β stopping
+was added).
