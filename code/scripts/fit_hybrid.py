@@ -344,13 +344,12 @@ def build_numpy_nll_mstcm(ll_inputs):
 # --- Curve simulation + MSE ---------------------------------------------
 
 
-def simulate_curves(model: str, params, sim_inputs, n_draws: int,
-                    master_seed: int, ds_template: Dataset, W: int):
-    """Return (SPC, pFR, lag-CRP) averaged over n_draws synthetic datasets.
+def _simulate_recall_tensor(model: str, params, sim_inputs, n_draws: int,
+                              master_seed: int, W: int):
+    """Run JAX-batched sim and return (out, mask, list_to_participant).
 
-    JAX-batched path: builds a single (N, W) cat_indices tensor (N = L × n_draws),
-    runs the appropriate JAX-batched simulator once per loss eval, and computes
-    curves directly from the (N, R) recall tensor (no DataFrame roundtrip).
+    list_to_participant[i] gives the participant id of sim row i (so
+    that curves can be aggregated per-participant).
     """
     L = len(sim_inputs)
     N = L * n_draws
@@ -361,9 +360,12 @@ def simulate_curves(model: str, params, sim_inputs, n_draws: int,
     max_recalls = 3 * W
 
     cat_batch_np = np.zeros((N, W), dtype=np.int32)
+    list_to_participant = np.zeros(N, dtype=np.int64)
     for d in range(n_draws):
-        for li, (_, _, _, _, cat_indices, *_rest) in enumerate(sim_inputs):
-            cat_batch_np[d * L + li] = cat_indices
+        for li, (part, _, _, _, cat_indices, *_rest) in enumerate(sim_inputs):
+            row = d * L + li
+            cat_batch_np[row] = cat_indices
+            list_to_participant[row] = part
     cat_batch = jnp.asarray(cat_batch_np)
     keys_batch = jax.random.split(jax.random.PRNGKey(master_seed), N)
 
@@ -384,14 +386,75 @@ def simulate_curves(model: str, params, sim_inputs, n_draws: int,
         )
     else:
         raise ValueError(f"unknown model: {model!r}")
-    out_np = np.asarray(out); mask_np = np.asarray(mask)
-    return _curves_from_recall_tensor(out_np, mask_np, W)
+    return np.asarray(out), np.asarray(mask), list_to_participant
+
+
+def simulate_curves(model: str, params, sim_inputs, n_draws: int,
+                    master_seed: int, ds_template: Dataset, W: int):
+    """Aggregate (SPC, pFR, lag-CRP) curves averaged over all sim lists."""
+    out, mask, _ = _simulate_recall_tensor(
+        model, params, sim_inputs, n_draws, master_seed, W,
+    )
+    return _curves_from_recall_tensor(out, mask, W)
+
+
+def simulate_curves_per_participant(
+    model: str, params, sim_inputs, n_draws: int,
+    master_seed: int, ds_template: Dataset, W: int,
+):
+    """Per-participant (SPC, pFR, lag-CRP) curves.
+
+    Returns (spc_pp, pfr_pp, crp_pp) of shape (P, W), (P, W), (P, 10).
+    Aggregates each participant's `n_draws × n_lists_per_participant`
+    simulations into that participant's own curves.
+    """
+    out, mask, l2p = _simulate_recall_tensor(
+        model, params, sim_inputs, n_draws, master_seed, W,
+    )
+    return per_participant_curves_from_tensor(out, mask, W, l2p)
 
 
 def _curves_from_recall_tensor(out, mask, W):
     """Wrapper around fit_mstcm_curves.curves_from_recall_tensor."""
     from fit_mstcm_curves import curves_from_recall_tensor
     return curves_from_recall_tensor(out, mask, W)
+
+
+def per_participant_curves_from_tensor(
+    out, mask, W, list_to_participant,
+):
+    """Per-participant aggregate curves.
+
+    Parameters
+    ----------
+    out, mask : (N, R) arrays from a JAX-batched simulation.
+    W : int — list length.
+    list_to_participant : (N,) int — participant index for each sim list.
+
+    Returns
+    -------
+    spc_pp : (P, W) per-participant SPC.
+    pfr_pp : (P, W) per-participant pFR.
+    crp_pp : (P, 10) per-participant lag-CRP (|lag|=1..5).
+    """
+    from fit_mstcm_curves import curves_from_recall_tensor
+
+    list_to_participant = np.asarray(list_to_participant)
+    participants = np.unique(list_to_participant)
+    P = participants.size
+    spc_pp = np.zeros((P, W), dtype=np.float64)
+    pfr_pp = np.zeros((P, W), dtype=np.float64)
+    crp_pp = np.full((P, 10), np.nan, dtype=np.float64)
+    for i, p in enumerate(participants):
+        rows = np.where(list_to_participant == p)[0]
+        if rows.size == 0:
+            continue
+        out_p = out[rows]; mask_p = mask[rows]
+        s, f, c = curves_from_recall_tensor(out_p, mask_p, W)
+        spc_pp[i] = s
+        pfr_pp[i] = f
+        crp_pp[i] = c
+    return spc_pp, pfr_pp, crp_pp
 
 
 def _curves_from_dataset(ds: Dataset, W: int):
@@ -401,6 +464,60 @@ def _curves_from_dataset(ds: Dataset, W: int):
     lags = lag_crp.lag_axis(W)
     keep = (np.abs(lags) >= 1) & (np.abs(lags) <= 5)
     return spc, p_fr, crp[keep]
+
+
+def per_participant_observed_curves(ds: Dataset, W: int):
+    """Per-participant observed (SPC, pFR, lag-CRP) from the recalled table."""
+    pdf = ds.presented.to_pandas()
+    rdf = ds.recalled.to_pandas()
+    parts = sorted(pdf["participant"].unique().tolist())
+    P = len(parts)
+    spc_pp = np.zeros((P, W), dtype=np.float64)
+    pfr_pp = np.zeros((P, W), dtype=np.float64)
+    crp_pp = np.full((P, 10), np.nan, dtype=np.float64)
+
+    for i, p in enumerate(parts):
+        # Build a Dataset slice for this participant.
+        sub_pdf = pdf[pdf["participant"] == p]
+        sub_rdf = rdf[rdf["participant"] == p]
+        sub_ds = Dataset(
+            presented=pa.Table.from_pandas(sub_pdf, preserve_index=False),
+            recalled=pa.Table.from_pandas(sub_rdf, preserve_index=False),
+            manifest=ds.manifest,
+        )
+        s, f, c = _curves_from_dataset(sub_ds, W)
+        spc_pp[i] = s
+        pfr_pp[i] = f
+        crp_pp[i] = c
+    return spc_pp, pfr_pp, crp_pp
+
+
+def per_participant_curve_penalty(
+    sim_pp_curves, obs_pp_curves, weights,
+):
+    """Mean-over-participants weighted curve penalty.
+
+    For each participant, compute the same MSE penalty as the aggregate
+    version, then average across participants. This treats every
+    participant's curves as a target the model should match (a soft
+    random-effects style: no per-participant parameters, just per-
+    participant evidence).
+    """
+    spc_sim, pfr_sim, crp_sim = sim_pp_curves
+    spc_obs, pfr_obs, crp_obs = obs_pp_curves
+    P = spc_sim.shape[0]
+    total = 0.0
+    for (sim, obs, w) in zip(
+        (spc_sim, pfr_sim, crp_sim),
+        (spc_obs, pfr_obs, crp_obs),
+        weights,
+    ):
+        diff = sim - obs
+        diff = np.where(np.isnan(diff), 0.0, diff)
+        # per-participant MSE then mean.
+        per_p = (diff ** 2).mean(axis=1)
+        total += w * float(per_p.mean())
+    return total
 
 
 def curve_penalty(sim_curves, obs_curves, weights):
@@ -417,10 +534,14 @@ def curve_penalty(sim_curves, obs_curves, weights):
 
 
 def make_hybrid_loss(ds, model: str, lam: float, weights, n_draws: int,
-                     curve_seed: int):
+                     curve_seed: int, per_participant: bool = False):
     ll_inputs, sim_inputs = build_per_list_inputs_obs(ds)
     W = ds.num_words_per_list
-    obs_curves = _curves_from_dataset(ds, W)
+
+    if per_participant:
+        obs_curves = per_participant_observed_curves(ds, W)
+    else:
+        obs_curves = _curves_from_dataset(ds, W)
 
     if model == "cz":
         nll_fn = build_jax_nll_cz(ll_inputs)
@@ -434,6 +555,26 @@ def make_hybrid_loss(ds, model: str, lam: float, weights, n_draws: int,
     else:
         raise ValueError(model)
 
+    def _curves(params):
+        if per_participant:
+            return simulate_curves_per_participant(
+                model, params, sim_inputs, n_draws=n_draws,
+                master_seed=curve_seed, ds_template=ds, W=W,
+            )
+        else:
+            return simulate_curves(
+                model, params, sim_inputs, n_draws=n_draws,
+                master_seed=curve_seed, ds_template=ds, W=W,
+            )
+
+    def _penalty(sim_curves):
+        if per_participant:
+            return per_participant_curve_penalty(
+                sim_curves, obs_curves, weights,
+            )
+        else:
+            return curve_penalty(sim_curves, obs_curves, weights)
+
     def loss(theta_np):
         try:
             params = theta_to_params(theta_np)
@@ -446,23 +587,17 @@ def make_hybrid_loss(ds, model: str, lam: float, weights, n_draws: int,
         if not np.isfinite(ll_term):
             return float("inf")
         try:
-            sim_curves = simulate_curves(
-                model, params, sim_inputs, n_draws=n_draws,
-                master_seed=curve_seed, ds_template=ds, W=W,
-            )
+            sim_curves = _curves(params)
         except Exception:
             return float("inf")
-        cp = curve_penalty(sim_curves, obs_curves, weights)
+        cp = _penalty(sim_curves)
         return ll_term + lam * cp
 
     def loss_components(theta_np):
         params = theta_to_params(theta_np)
         ll_term = nll_fn(theta_np)
-        sim_curves = simulate_curves(
-            model, params, sim_inputs, n_draws=n_draws,
-            master_seed=curve_seed, ds_template=ds, W=W,
-        )
-        cp = curve_penalty(sim_curves, obs_curves, weights)
+        sim_curves = _curves(params)
+        cp = _penalty(sim_curves)
         return ll_term, cp, sim_curves
 
     return loss, loss_components, theta_to_params
@@ -488,6 +623,11 @@ def main():
     parser.add_argument("--out", default=None)
     parser.add_argument("--restart-std", type=float, default=0.4)
     parser.add_argument("--maxiter", type=int, default=80)
+    parser.add_argument(
+        "--per-participant", action="store_true",
+        help="Compute curve penalty per-participant instead of on the "
+             "aggregate curve. Better captures heterogeneity in the data.",
+    )
     args = parser.parse_args()
 
     if args.out is None:
@@ -509,6 +649,7 @@ def main():
     loss, loss_components, theta_to_params = make_hybrid_loss(
         ds, args.model, lam=args.lambda_curve, weights=weights,
         n_draws=args.n_draws, curve_seed=args.curve_seed,
+        per_participant=args.per_participant,
     )
 
     if args.model == "cz":
