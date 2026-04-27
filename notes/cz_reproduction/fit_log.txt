@@ -1,11 +1,11 @@
 # Fit C&Z hierarchical to frfr_category (n_restarts=5, seed=42)
 NLL at C&Z Table 1 init = 12930.2280
-restart 0: nll0=12930.2280  nll*=10699.8188  converged=True  iters=16  elapsed=1.1s
-restart 1: nll0=17362.1482  nll*=10699.8188  converged=True  iters=17  elapsed=1.2s
-restart 2: nll0=14342.3457  nll*=10699.8188  converged=True  iters=17  elapsed=1.2s
-restart 3: nll0=11742.9068  nll*=10699.8188  converged=True  iters=15  elapsed=1.2s
-restart 4: nll0=12539.5539  nll*=10699.8188  converged=True  iters=16  elapsed=1.3s
-best: nll=10699.8188  ll=-10699.8188  restart=2  total fit time=5.9s
+restart 0: nll0=12930.2280  nll*=10699.8188  converged=True  iters=16  elapsed=3.4s
+restart 1: nll0=17362.1482  nll*=10699.8188  converged=True  iters=17  elapsed=3.4s
+restart 2: nll0=14342.3457  nll*=10699.8188  converged=True  iters=17  elapsed=3.6s
+restart 3: nll0=11742.9068  nll*=10699.8188  converged=True  iters=15  elapsed=3.2s
+restart 4: nll0=12539.5539  nll*=10699.8188  converged=True  iters=16  elapsed=3.6s
+best: nll=10699.8188  ll=-10699.8188  restart=2  total fit time=17.5s
 
 MLE parameters:
   beta_enc = 0.7689

@@ -31,6 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ms_tcm._likelihood_shared import (
+    _is_jax,
     activation, c_IN_rec_of, compute_p_stop, drift_c_ret, log_softmax_masked,
     norm_preserving_rho, at_add, at_set,
 )
@@ -66,6 +67,7 @@ def run_encoding_cmr(hp: CMRCoreHyperparams, W: int, xp, dtype):
 
     Returns (c_item_traj, M_fc_exp, M_cf_exp) — same signature as
     `run_encoding` in _likelihood_core.py minus the c_list bookkeeping.
+    Supports both numpy and jax.numpy via the `xp` namespace.
     """
     d = W + 1
     e_start = xp.zeros(d, dtype=dtype)
@@ -73,6 +75,28 @@ def run_encoding_cmr(hp: CMRCoreHyperparams, W: int, xp, dtype):
     c_item = e_start
     m_fc_exp = xp.zeros((d, W), dtype=dtype)
     m_cf_exp = xp.zeros((W, d), dtype=dtype)
+
+    if _is_jax(xp):
+        import jax
+
+        def step(carry, t):
+            c_item, m_fc_exp, m_cf_exp = carry
+            m_fc_exp = at_set(m_fc_exp, (slice(None), t), m_fc_exp[:, t] + c_item, xp)
+            m_cf_exp = at_set(m_cf_exp, (t, slice(None)), m_cf_exp[t, :] + c_item, xp)
+            t_plus_1 = t + 1
+            dot_i = c_item[t_plus_1]
+            rho_i = norm_preserving_rho(hp.beta_enc, dot_i, xp)
+            c_item = rho_i * c_item
+            c_item = at_add(c_item, t_plus_1, hp.beta_enc, xp)
+            return (c_item, m_fc_exp, m_cf_exp), c_item
+
+        t_arr = xp.arange(W, dtype=xp.int32)
+        init = (c_item, m_fc_exp, m_cf_exp)
+        (_, m_fc_final, m_cf_final), c_item_steps = jax.lax.scan(step, init, t_arr)
+        c_item_traj = xp.concatenate([e_start[None, :], c_item_steps], axis=0)
+        return c_item_traj, m_fc_final, m_cf_final
+
+    # numpy path.
     c_item_traj = xp.zeros((W + 1, d), dtype=dtype)
     c_item_traj = at_set(c_item_traj, 0, e_start, xp)
     for t in range(W):
@@ -85,6 +109,87 @@ def run_encoding_cmr(hp: CMRCoreHyperparams, W: int, xp, dtype):
         c_item = at_add(c_item, t_plus_1, hp.beta_enc, xp)
         c_item_traj = at_set(c_item_traj, t + 1, c_item, xp)
     return c_item_traj, m_fc_exp, m_cf_exp
+
+
+def compute_list_log_likelihood_cmr(
+    hp: CMRCoreHyperparams,
+    W: int,
+    recall_sps,    # (R,) int: 1-based serial positions; 0 = padding
+    recall_mask,   # (R,) bool: True for valid recall slots
+    xp,
+    dtype,
+):
+    """Per-list log-likelihood under Polyn 2009 standard CMR.
+
+    Single-phase retrieval starting from c_ret = c_item_end. For each
+    valid recall slot i:
+
+        contrib_i = log(1 - p_stop_i)            # continued
+                   + log_softmax(k · a_i)[s_i - 1]
+        c_ret    ← drift(c_ret, c_IN_rec(s_i - 1), β_rec)
+
+    After all R drifts, add log p_stop_final at the end.
+
+    No T-marginalization (CMR has only one phase). Works in numpy or
+    JAX via the `xp` namespace; gradient-friendly under jax.grad.
+    """
+    d = W + 1
+    c_item_traj, m_fc_exp, m_cf_exp = run_encoding_cmr(hp, W, xp, dtype)
+    phi = primacy_gradient(W, hp.phi_s, hp.phi_d, xp, dtype)  # (W,)
+    m_cf_eff = m_cf_exp * phi[:, None]  # (W, d) — broadcast over context dim
+
+    c_ret_init = c_item_traj[W]
+    R_pad = recall_sps.shape[0]
+
+    def step(carry, t):
+        c_ret, cum, already = carry
+        sp = recall_sps[t]
+        valid = recall_mask[t]
+        # Index for sp-1 (clamped to valid range so JAX gather doesn't
+        # complain on padded slots).
+        sp_idx = xp.clip(sp - 1, 0, W - 1)
+        is_repeat = already[sp_idx]
+        countable = valid & ~is_repeat
+        # Activations + p_stop computed at PRE-drift c_ret.
+        a = activation(m_cf_eff, c_ret, xp)
+        p_stop = compute_p_stop(m_cf_eff, c_ret, already, hp.epsilon_d, xp)
+        log_continue = xp.log(xp.maximum(1.0 - p_stop, 1e-300))
+        log_p_pick = log_softmax_masked(hp.k * a, ~already, xp)
+        contrib = xp.where(
+            countable,
+            log_continue + log_p_pick[sp_idx],
+            xp.asarray(0.0, dtype=dtype),
+        )
+        cum = cum + contrib
+        # Drift only if countable.
+        c_in = c_IN_rec_of(sp_idx, m_fc_exp, hp.gamma_fc, d, xp, dtype)
+        c_ret_new = drift_c_ret(c_ret, c_in, hp.beta_rec, xp)
+        c_ret = xp.where(countable, c_ret_new, c_ret)
+        # already_mask updated only when countable.
+        already_new = at_set(already, sp_idx, True, xp) if not _is_jax(xp) else already.at[sp_idx].set(True)
+        already = xp.where(countable, already_new, already)
+        return (c_ret, cum, already), None
+
+    cum0 = xp.asarray(0.0, dtype=dtype)
+    already0 = xp.zeros(W, dtype=bool)
+    init = (c_ret_init, cum0, already0)
+    if _is_jax(xp):
+        import jax
+        (c_ret_final, cum_total, already_final), _ = jax.lax.scan(
+            step, init, xp.arange(R_pad, dtype=xp.int32),
+        )
+    else:
+        carry = init
+        for t in range(R_pad):
+            carry, _ = step(carry, t)
+        c_ret_final, cum_total, already_final = carry
+
+    # Final stopping term.
+    p_stop_final = compute_p_stop(
+        m_cf_eff, c_ret_final, already_final, hp.epsilon_d, xp,
+    )
+    log_p_stop_final = xp.log(xp.maximum(p_stop_final, 1e-300))
+    return cum_total + log_p_stop_final
 
 
 def primacy_gradient(W: int, phi_s: float, phi_d: float, xp, dtype):

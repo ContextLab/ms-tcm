@@ -1199,3 +1199,50 @@ The curve-RMSE optimizer pushed toward this flat regime because:
 the model is currently underfit (sp 1, 14-16 for SPC; ±1 for lag-CRP).
 Or: reintroduce the trial-LL fit's k regularization (k_lower_bound) so
 the optimizer can't escape into k≈0.
+
+### Iteration 5d: same trial-LL process for all three models
+
+**Decision (2026-04-26 evening)**: switch the canonical model
+comparison from curve-RMSE back to trial-LL, applied identically to
+all three models (Polyn CMR, C&Z hierarchical, MS-TCM). The
+curve-RMSE objective produced the under-fit MS-TCM regime; trial-LL
+fits earlier iterations all produced fits that captured the relevant
+phenomena (primacy, recency, lag-CRP contiguity).
+
+**Implementation**:
+- New `code/ms_tcm/_likelihood_core_cmr.py::compute_list_log_likelihood_cmr`
+  — closed-form Polyn 2009 trial-LL, JAX-grad-compatible. Single phase
+  (no T-marginalization), with primacy gradient
+  `M^CF_eff = M^CF_exp · diag(φ_l)` where
+  `φ_l = φ_s · exp(-φ_d · (l-1)) + 1`. Treats repeat recalls as noise
+  (matches C&Z LL convention: `countable = valid & ~is_repeat`).
+- New `code/scripts/fit_cmr_to_frfr.py` — JAX-grad fit (parallel
+  structure to `fit_cz_to_frfr.py`). 7 parameters; converges in <1s
+  per restart on FRFR-category.
+
+**Final trial-LL results** (FRFR-category, n_restarts=5, seed=42,
+L-BFGS-B with maxiter=200):
+
+| Model            | NLL       | LL         | Wall time |
+|-|-|-|-|
+| **MS-TCM**       | **10557.61** | -10557.61 | ~12 min (numpy+FD) |
+| HCMR (C&Z)       | 10699.82  | -10699.82  | 17.5 s (JAX-grad) |
+| Polyn 2009 CMR   | 11233.52  | -11233.52  | 1.5 s (JAX-grad) |
+
+**Findings**:
+- MS-TCM beats HCMR by 142 nats (140 in extras: 11→7 free params, ΔAIC > 0
+  so MS-TCM wins on AIC despite the extra parameters).
+- MS-TCM beats Polyn CMR by 676 nats — confirming hierarchical
+  structure helps.
+- The figure (regenerated with trial-LL fits) now shows all three
+  models capturing strong recency in pFR, the lag-CRP contiguity peak
+  at ±1, and the bowed SPC shape. MS-TCM still slightly over-predicts
+  the SPC in the middle positions (sp 5-12) for both halves of FRFR-
+  category, but primacy and recency are captured.
+
+**Curve-RMSE vs trial-LL** comparison: the curve-RMSE optimizer for
+MS-TCM landed at k=0.80, ε_d=0.75 (random-recall regime); the
+trial-LL optimizer at k=3.12, ε_d=2.89 (sensible recall). Trial-LL
+prevents the optimizer from escaping into k≈0 because LL would
+collapse to N×log(1/W) ≈ N × log(1/16) = -2.77N — much worse than
+even a mediocre fit. Curve-RMSE has no such anchor.

@@ -1,0 +1,17 @@
+# Fit Polyn 2009 CMR to frfr_category (n_restarts=5, seed=42)
+NLL at Polyn init = 12358.3273
+restart 0: nll0=12358.3273  nll*=11233.5227  converged=True  iters=16  elapsed=0.3s
+restart 1: nll0=14909.0497  nll*=11233.5227  converged=True  iters=22  elapsed=0.4s
+restart 2: nll0=12280.1266  nll*=11233.5227  converged=True  iters=19  elapsed=0.4s
+restart 3: nll0=12058.5473  nll*=11233.5227  converged=True  iters=19  elapsed=0.2s
+restart 4: nll0=12337.2699  nll*=11233.5227  converged=True  iters=16  elapsed=0.1s
+best: nll=11233.5227  ll=-11233.5227  restart=1  total fit time=1.5s
+
+MLE parameters:
+  beta_enc = 0.7222
+  beta_rec = 0.8335
+  gamma_fc = 0.5411
+  k = 3.0175
+  epsilon_d = 2.4935
+  phi_s = 1.1743
+  phi_d = 0.4808

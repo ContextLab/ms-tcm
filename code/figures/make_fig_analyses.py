@@ -125,8 +125,13 @@ def _load_mstcm_fitted_params(
 
 
 def _load_cmr_fitted_params(
-    fit_path: Path = Path("data/processed/fits/cmr_curves_frfr/fit_summary.json"),
+    fit_path: Path | None = None,
 ) -> tuple[ModelParameters, str, float | None] | None:
+    if fit_path is None:
+        # Prefer trial-LL fit, fall back to curve fit.
+        ll_path = Path("data/processed/fits/cmr_frfr/fit_summary.json")
+        curve_path = Path("data/processed/fits/cmr_curves_frfr/fit_summary.json")
+        fit_path = ll_path if ll_path.exists() else curve_path
     """Load Polyn 2009 standard CMR MLE parameters; return None if missing."""
     if not fit_path.exists():
         return None
@@ -345,10 +350,14 @@ def main() -> int:
     if args.use_table_1:
         params, label, ll = CZ_TABLE_1, "C&Z 2025 (Table 1)", None
     else:
-        # Prefer the curve-fit summary; fall back to LL fit; finally
-        # to whatever path the caller passed via --fit-path.
+        # Prefer the trial-LL fit (Option 1: same trial-LL process for
+        # all three models — see arch log Iteration 5d). Fall back to
+        # the curve-RMSE fit, then to whatever path was passed.
+        cz_ll_path = Path("data/processed/fits/cz_frfr/fit_summary.json")
         cz_curve_path = Path("data/processed/fits/cz_curves_frfr/fit_summary.json")
-        if cz_curve_path.exists():
+        if cz_ll_path.exists():
+            params, label, ll = _load_fitted_params(cz_ll_path)
+        elif cz_curve_path.exists():
             params, label, ll = _load_fitted_params(cz_curve_path)
         else:
             params, label, ll = _load_fitted_params(Path(args.fit_path))
@@ -363,16 +372,15 @@ def main() -> int:
         )
         print(f"  {name} = {val:.4f}")
 
-    # Try to load MS-TCM fit too. Prefer the curve-fit summary (the
-    # newer fitting objective in this work; see fit_mstcm_curves.py)
-    # over the older trial-LL fit. Fall back to the LL fit if curves
-    # are missing.
+    # Try to load MS-TCM fit too. Prefer the trial-LL fit (Option 1:
+    # same trial-LL process for all three models — see arch log
+    # Iteration 5d). Fall back to the curve-RMSE fit if missing.
     mstcm_curve_path = Path("data/processed/fits/mstcm_curves_frfr/fit_summary.json")
     mstcm_ll_path = Path("data/processed/fits/mstcm_frfr/fit_summary.json")
     mstcm_loaded = (
-        _load_mstcm_fitted_params(mstcm_curve_path)
-        if mstcm_curve_path.exists()
-        else _load_mstcm_fitted_params(mstcm_ll_path)
+        _load_mstcm_fitted_params(mstcm_ll_path)
+        if mstcm_ll_path.exists()
+        else _load_mstcm_fitted_params(mstcm_curve_path)
     )
     if mstcm_loaded is not None:
         params_mstcm, label_mstcm, ll_mstcm = mstcm_loaded
