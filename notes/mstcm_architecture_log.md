@@ -1246,3 +1246,76 @@ trial-LL optimizer at k=3.12, ε_d=2.89 (sensible recall). Trial-LL
 prevents the optimizer from escaping into k≈0 because LL would
 collapse to N×log(1/W) ≈ N × log(1/16) = -2.77N — much worse than
 even a mediocre fit. Curve-RMSE has no such anchor.
+
+### Iteration 5d follow-up: SPC over-prediction diagnosis
+
+**Issues flagged by user (from regenerated trial-LL figure)**:
+1. MS-TCM SPC too high in middle positions
+2. Polyn CMR SPC too low overall AND shows reverse primacy
+   (sp 1 < sp 2 in p(recall))
+
+**Diagnostic** (`/tmp/diag_recall_counts.py`): mean unique recalls per list:
+
+| | mean recalls/list | sd |
+|-|-|-|
+| Observed (FRFR-category, all lists) | 9.95 | 3.11 |
+| HCMR (C&Z) MLE | 9.86 | 2.17 |
+| MS-TCM MLE | **11.83** | 3.34 |
+| Polyn CMR MLE | 8.84 | 2.81 |
+
+**Issue 1 (MS-TCM over-recalls)**: at the trial-LL MLE
+(τ=0.59, λ=0.47, w_global=0.28, k=3.12, ε_d=2.89), MS-TCM recalls
+~12 items per list (19% more than observed). The recall-length
+distribution is skewed strongly toward 14-15 items (1228/5000 lists
+hit 15 recalls). This explains the elevated SPC across all middle
+positions — the model recalls almost everything, so SPC has no
+"missed-middle" trough.
+
+Root cause: route β (entered with prob τ=0.59) cycles through all
+storylines, recalling until each is fully exhausted or stops. The
+optimizer pushed ε_d up because trial-LL's penalty for over-recalling
+is weak (each extra recall adds `log(1-p_stop) + log p(s_i|c_ret)`
+which is on average less negative than terminating early).
+
+**Possible fixes**:
+- Add a stopping-rule prior (penalize ε_d > 1.5 or so).
+- Treat the lambda_reinstate / w_global / tau_init grid more carefully
+  (is route β over-utilized?).
+- The model itself may need a "cumulative-recall stop" mechanism that
+  fires more sharply once enough items are recalled.
+
+**Issue 2 (CMR SPC too low)**: mean recalls 8.84 — only a 1.1-item
+under-recall. Not the dominant issue.
+
+**Issue 3 (CMR reverse primacy)**: at the trial-LL MLE, CMR has
+φ_s=1.17, φ_d=0.48. The φ gradient at sp 1 is φ_1=2.17, φ_2=1.73,
+…, φ_16=1.00. Primacy boost IS in place. So why does the SPC show
+reverse primacy?
+
+CMR walks BACKWARD through serial positions during recall: starts
+at c_ret = c_item_end, recalls sp 16, drifts toward c_item[15],
+recalls sp 15, …. The φ boost on sp 1 doesn't help much for the
+*first* recall because c_item_pre[0] = e_start, which is orthogonal
+to c_item_end — the activation at sp 1 is φ_1 · e_start · c_item_end
+= φ_1 · 0 = 0. Sp 1 only becomes available when c_ret has drifted
+all the way back to e_start, and the model often runs out of
+"continue" rolls before that happens.
+
+Critically, the optimizer chose **weak primacy** (φ_s=1.17 vs Polyn
+2009's published 2.5) because the FRFR-category data has strong
+**first-recall primacy** (pFR(sp 1) = 0.273) that single-phase CMR
+cannot reproduce. To accommodate the observed pFR distribution, the
+LL pushes φ to a low value — sacrificing SPC primacy.
+
+**Verification** (CMR with Polyn 2009 Table 1 values φ_s=2.5, φ_d=0.97):
+SPC bowed shape with primacy peak at sp 1 (0.30) and recency at sp 16
+(0.99) — but pFR is dominated by sp 16 (pFR=0.73), totally missing
+the observed pFR(sp 1)=0.273.
+
+**Conclusion**: standard CMR (single phase, no hierarchical fallback)
+fundamentally cannot fit FRFR-category-like data with strong
+primacy in pFR. Polyn 2009 fitted to Murdock 1962 (no category
+structure, weaker primacy in pFR) where this isn't a problem. The
+"reverse primacy" in our fitted CMR is the LL optimizer's best
+compromise given a model that doesn't have a primacy-initiation
+mechanism (which C&Z's two-phase and MS-TCM's τ-route both have).
