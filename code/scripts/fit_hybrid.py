@@ -47,11 +47,15 @@ from scipy.special import expit, logit
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "code"))
 
-from ms_tcm._likelihood_core import simulate_recalls
-from ms_tcm._likelihood_core_cmr import simulate_recalls_cmr
+from ms_tcm._likelihood_core import (
+    simulate_recalls, simulate_recalls_jax_batch as simulate_recalls_jax_batch_cz,
+)
+from ms_tcm._likelihood_core_cmr import (
+    simulate_recalls_cmr, simulate_recalls_cmr_jax_batch,
+)
 from ms_tcm._likelihood_core_mstcm import (
     compute_list_log_likelihood_mstcm_numpy,
-    simulate_recalls_mstcm,
+    simulate_recalls_mstcm, simulate_recalls_mstcm_jax_batch,
 )
 from ms_tcm.dataset import Dataset
 from ms_tcm.frfr import load_frfr_category
@@ -73,6 +77,7 @@ from ms_tcm._likelihood_core_cmr import (
     CMRCoreHyperparams,
     compute_list_log_likelihood_cmr,
 )
+from ms_tcm._likelihood_core_mstcm import MSCoreHyperparams
 
 
 # --- Theta parameterizations (model-specific) ---------------------------
@@ -341,49 +346,52 @@ def build_numpy_nll_mstcm(ll_inputs):
 
 def simulate_curves(model: str, params, sim_inputs, n_draws: int,
                     master_seed: int, ds_template: Dataset, W: int):
-    """Return (SPC, pFR, lag-CRP) averaged over n_draws synthetic datasets."""
-    pdf_orig = ds_template.presented.to_pandas()
-    pres_rows = []
-    rec_rows = []
-    rng_master = np.random.default_rng(master_seed)
+    """Return (SPC, pFR, lag-CRP) averaged over n_draws synthetic datasets.
+
+    JAX-batched path: builds a single (N, W) cat_indices tensor (N = L × n_draws),
+    runs the appropriate JAX-batched simulator once per loss eval, and computes
+    curves directly from the (N, R) recall tensor (no DataFrame roundtrip).
+    """
+    L = len(sim_inputs)
+    N = L * n_draws
+    K_set = {x[3] for x in sim_inputs}
+    if len(K_set) != 1:
+        raise ValueError(f"non-uniform K in sim_inputs: {K_set}")
+    K = next(iter(K_set))
+    max_recalls = 3 * W
+
+    cat_batch_np = np.zeros((N, W), dtype=np.int32)
     for d in range(n_draws):
-        for (part, lst, Wi, K, cat_indices, cats, words, list_group) in sim_inputs:
-            pseudo_part = part + 100_000 * d
-            sub_pres = pdf_orig[
-                (pdf_orig["participant"]==part) & (pdf_orig["list"]==lst)
-            ].sort_values("serial_position").copy()
-            sub_pres["participant"] = pseudo_part
-            pres_rows.append(sub_pres)
-            seed = int(rng_master.integers(0, 2**31-1)) ^ (d*997) ^ (part*37) ^ lst
-            rng = np.random.default_rng(seed)
-            if model == "mstcm":
-                recalls = simulate_recalls_mstcm(
-                    params, W=Wi, K=K, cat_indices=cat_indices, rng=rng,
-                )
-            elif model == "cz":
-                recalls = simulate_recalls(params, W=Wi, rng=rng)
-            else:
-                recalls = simulate_recalls_cmr(params, W=Wi, rng=rng)
-            for out_pos, sp in enumerate(recalls, start=1):
-                rec_rows.append({
-                    "participant": pseudo_part, "list": lst,
-                    "output_position": out_pos,
-                    "word": words[sp - 1],
-                    "category": cats[sp - 1],
-                    "serial_position": int(sp),
-                    "list_group": list_group,
-                })
-    pres_df = pd.concat(pres_rows, ignore_index=True)
-    rec_df = pd.DataFrame(rec_rows) if rec_rows else pd.DataFrame(
-        columns=["participant", "list", "output_position", "word",
-                 "category", "serial_position", "list_group"],
-    )
-    sim_ds = Dataset(
-        presented=pa.Table.from_pandas(pres_df, preserve_index=False),
-        recalled=pa.Table.from_pandas(rec_df, preserve_index=False),
-        manifest=ds_template.manifest,
-    )
-    return _curves_from_dataset(sim_ds, W)
+        for li, (_, _, _, _, cat_indices, *_rest) in enumerate(sim_inputs):
+            cat_batch_np[d * L + li] = cat_indices
+    cat_batch = jnp.asarray(cat_batch_np)
+    keys_batch = jax.random.split(jax.random.PRNGKey(master_seed), N)
+
+    if model == "mstcm":
+        hp = MSCoreHyperparams.from_model_parameters(params)
+        out, mask = simulate_recalls_mstcm_jax_batch(
+            hp, W, K, cat_batch, keys_batch, max_recalls=max_recalls,
+        )
+    elif model == "cz":
+        hp = CoreHyperparams.from_model_parameters(params)
+        out, mask = simulate_recalls_jax_batch_cz(
+            hp, W, keys_batch, max_recalls=max_recalls,
+        )
+    elif model == "cmr":
+        hp = CMRCoreHyperparams.from_model_parameters(params)
+        out, mask = simulate_recalls_cmr_jax_batch(
+            hp, W, keys_batch, max_recalls=max_recalls,
+        )
+    else:
+        raise ValueError(f"unknown model: {model!r}")
+    out_np = np.asarray(out); mask_np = np.asarray(mask)
+    return _curves_from_recall_tensor(out_np, mask_np, W)
+
+
+def _curves_from_recall_tensor(out, mask, W):
+    """Wrapper around fit_mstcm_curves.curves_from_recall_tensor."""
+    from fit_mstcm_curves import curves_from_recall_tensor
+    return curves_from_recall_tensor(out, mask, W)
 
 
 def _curves_from_dataset(ds: Dataset, W: int):

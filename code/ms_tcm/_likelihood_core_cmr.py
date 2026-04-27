@@ -237,3 +237,117 @@ def simulate_recalls_cmr(params, W: int, rng, *, max_recalls: int | None = None)
         c_in = c_IN_rec_of(idx, m_fc_exp, hp.gamma_fc, d, np, np.float64)
         c_ret = drift_c_ret(c_ret, c_in, hp.beta_rec, np)
     return recalls
+
+
+# --- JAX-batched simulator -------------------------------------------------
+#
+# Same generative process as ``simulate_recalls_cmr`` (numpy) but jitted
+# and vmappable. Single-phase retrieval from c_item_end.
+
+import functools as _functools
+
+
+def _hp_to_array_cmr(hp: CMRCoreHyperparams):
+    import jax.numpy as jnp
+    return jnp.asarray([
+        hp.beta_enc, hp.beta_rec, hp.gamma_fc, hp.k, hp.epsilon_d,
+        hp.phi_s, hp.phi_d,
+    ], dtype=jnp.float64)
+
+
+def _array_to_hp_cmr(hp_arr) -> CMRCoreHyperparams:
+    return CMRCoreHyperparams(
+        beta_enc=hp_arr[0], beta_rec=hp_arr[1], gamma_fc=hp_arr[2],
+        k=hp_arr[3], epsilon_d=hp_arr[4],
+        phi_s=hp_arr[5], phi_d=hp_arr[6],
+    )
+
+
+def _simulate_recalls_cmr_jax_impl(hp: CMRCoreHyperparams, W: int, key, max_recalls: int):
+    """Single-list JAX simulator for Polyn 2009 standard CMR."""
+    import jax
+    import jax.numpy as jnp
+
+    d = W + 1
+    c_item_traj, m_fc_exp, m_cf_exp = run_encoding_cmr(hp, W, jnp, jnp.float64)
+    phi = primacy_gradient(W, hp.phi_s, hp.phi_d, jnp, jnp.float64)
+    m_cf_eff = m_cf_exp * phi[:, None]
+
+    init_state = {
+        "key": key,
+        "terminated": jnp.asarray(False, dtype=bool),
+        "c_ret": c_item_traj[W],
+        "already_mask": jnp.zeros(W, dtype=bool),
+        "step": jnp.asarray(0, dtype=jnp.int32),
+        "recalls": jnp.zeros(max_recalls, dtype=jnp.int32),
+        "recall_mask": jnp.zeros(max_recalls, dtype=bool),
+    }
+
+    def cond_fn(state):
+        return (~state["terminated"]) & (state["step"] < max_recalls)
+
+    def body_fn(state):
+        key = state["key"]
+        already = state["already_mask"]
+        c_ret = state["c_ret"]
+        p_stop = compute_p_stop(m_cf_eff, c_ret, already, hp.epsilon_d, jnp)
+        key, k_stop, k_pick = jax.random.split(key, 3)
+        stop_now = jax.random.uniform(k_stop) < p_stop
+
+        a = activation(m_cf_eff, c_ret, jnp)
+        log_p = log_softmax_masked(hp.k * a, ~already, jnp)
+        idx = jax.random.categorical(k_pick, log_p)
+        new_already = already.at[idx].set(True)
+        c_in = c_IN_rec_of(idx, m_fc_exp, hp.gamma_fc, d, jnp, jnp.float64)
+        new_c_ret = drift_c_ret(c_ret, c_in, hp.beta_rec, jnp)
+
+        new_recalls = state["recalls"].at[state["step"]].set((idx + 1).astype(jnp.int32))
+        new_recall_mask = state["recall_mask"].at[state["step"]].set(True)
+
+        new_state = dict(state)
+        new_state["key"] = key
+        new_state["terminated"] = stop_now
+        new_state["c_ret"] = jnp.where(stop_now, c_ret, new_c_ret)
+        new_state["already_mask"] = jnp.where(stop_now, already, new_already)
+        new_state["recalls"] = jnp.where(stop_now, state["recalls"], new_recalls)
+        new_state["recall_mask"] = jnp.where(stop_now, state["recall_mask"], new_recall_mask)
+        new_state["step"] = jnp.where(stop_now, state["step"], state["step"] + 1)
+        return new_state
+
+    final = jax.lax.while_loop(cond_fn, body_fn, init_state)
+    return final["recalls"], final["recall_mask"]
+
+
+@_functools.partial(__import__("jax").jit, static_argnames=("W", "max_recalls"))
+def _simulate_recalls_cmr_jax_jitted(hp_arr, W: int, key, max_recalls: int):
+    hp = _array_to_hp_cmr(hp_arr)
+    return _simulate_recalls_cmr_jax_impl(hp, W, key, max_recalls)
+
+
+def simulate_recalls_cmr_jax(
+    hp: CMRCoreHyperparams, W: int, key, *, max_recalls: int | None = None,
+):
+    """JIT-cached single-list CMR simulator."""
+    if max_recalls is None:
+        max_recalls = 3 * W
+    return _simulate_recalls_cmr_jax_jitted(_hp_to_array_cmr(hp), W, key, max_recalls)
+
+
+@_functools.partial(__import__("jax").jit, static_argnames=("W", "max_recalls"))
+def _simulate_recalls_cmr_jax_batch_jitted(hp_arr, W: int, keys_batch, max_recalls: int):
+    import jax
+    def one(key):
+        hp = _array_to_hp_cmr(hp_arr)
+        return _simulate_recalls_cmr_jax_impl(hp, W, key, max_recalls)
+    return jax.vmap(one)(keys_batch)
+
+
+def simulate_recalls_cmr_jax_batch(
+    hp: CMRCoreHyperparams, W: int, keys_batch, *, max_recalls: int | None = None,
+):
+    """Batched JAX simulator for CMR. keys_batch shape (N, 2)."""
+    if max_recalls is None:
+        max_recalls = 3 * W
+    return _simulate_recalls_cmr_jax_batch_jitted(
+        _hp_to_array_cmr(hp), W, keys_batch, max_recalls,
+    )

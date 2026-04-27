@@ -679,3 +679,139 @@ def simulate_recalls(
         c_ret = drift_c_ret(c_ret, c_IN, hp.beta_rec, np)
 
     return recalls
+
+
+# --- JAX-batched simulator -------------------------------------------------
+#
+# Same generative process as ``simulate_recalls`` (numpy) but compiled with
+# jax.jit and amenable to vmap across keys for batched simulation. Used by
+# the hybrid fitter to compute curve simulations cheaply.
+#
+# Phase encoding for the unified while_loop state machine:
+#   PHASE_ONE      = 0  (cue = c_item_end; on stop, transition to phase 2)
+#   PHASE_TWO      = 1  (cue = e_start; on stop, terminate)
+#   PHASE_TERMINATED = 2
+
+import functools as _functools
+
+
+_PHASE_ONE = 0
+_PHASE_TWO = 1
+_PHASE_TERMINATED = 2
+
+
+def _hp_to_array_cz(hp: CoreHyperparams):
+    import jax.numpy as jnp
+    return jnp.asarray([
+        hp.beta_enc, hp.beta_list, hp.beta_rec, hp.beta_rein,
+        hp.gamma_fc, hp.k, hp.epsilon_d,
+    ], dtype=jnp.float64)
+
+
+def _array_to_hp_cz(hp_arr) -> CoreHyperparams:
+    return CoreHyperparams(
+        beta_enc=hp_arr[0], beta_list=hp_arr[1], beta_rec=hp_arr[2],
+        beta_rein=hp_arr[3], gamma_fc=hp_arr[4], k=hp_arr[5],
+        epsilon_d=hp_arr[6],
+    )
+
+
+def _simulate_recalls_jax_impl(hp: CoreHyperparams, W: int, key, max_recalls: int):
+    """Single-list JAX simulator for C&Z hierarchical (free recall)."""
+    import jax
+    import jax.numpy as jnp
+
+    d = W + 1
+    c_item_traj, m_fc_exp, m_cf_exp = run_encoding(hp, W, jnp, jnp.float64)
+    c_global_end = c_item_traj[W]
+    e_start = jnp.zeros(d, dtype=jnp.float64).at[0].set(1.0)
+
+    init_state = {
+        "key": key,
+        "phase": jnp.asarray(_PHASE_ONE, dtype=jnp.int32),
+        "c_ret": c_global_end,
+        "already_mask": jnp.zeros(W, dtype=bool),
+        "step": jnp.asarray(0, dtype=jnp.int32),
+        "recalls": jnp.zeros(max_recalls, dtype=jnp.int32),
+        "recall_mask": jnp.zeros(max_recalls, dtype=bool),
+    }
+
+    def cond_fn(state):
+        return (state["phase"] != _PHASE_TERMINATED) & (state["step"] < max_recalls)
+
+    def body_fn(state):
+        key = state["key"]
+        already = state["already_mask"]
+        c_ret = state["c_ret"]
+        p_stop = compute_p_stop(m_cf_exp, c_ret, already, hp.epsilon_d, jnp)
+        key, k_stop, k_pick = jax.random.split(key, 3)
+        stop_now = jax.random.uniform(k_stop) < p_stop
+
+        # Phase-1 stop transitions to Phase 2 (reinstate e_start). Phase-2
+        # stop terminates.
+        phase = state["phase"]
+        new_phase = jnp.where(
+            stop_now,
+            jnp.where(phase == _PHASE_ONE, _PHASE_TWO, _PHASE_TERMINATED),
+            phase,
+        )
+        new_c_ret_on_stop = jnp.where(phase == _PHASE_ONE, e_start, c_ret)
+
+        # Sample recall (only used if not stopping).
+        a = activation(m_cf_exp, c_ret, jnp)
+        log_p = log_softmax_masked(hp.k * a, ~already, jnp)
+        idx = jax.random.categorical(k_pick, log_p)
+        new_already = already.at[idx].set(True)
+        c_in = c_IN_rec_of(idx, m_fc_exp, hp.gamma_fc, d, jnp, jnp.float64)
+        new_c_ret_on_recall = drift_c_ret(c_ret, c_in, hp.beta_rec, jnp)
+
+        new_recalls = state["recalls"].at[state["step"]].set((idx + 1).astype(jnp.int32))
+        new_recall_mask = state["recall_mask"].at[state["step"]].set(True)
+
+        new_state = dict(state)
+        new_state["key"] = key
+        new_state["phase"] = new_phase
+        new_state["c_ret"] = jnp.where(stop_now, new_c_ret_on_stop, new_c_ret_on_recall)
+        new_state["already_mask"] = jnp.where(stop_now, already, new_already)
+        new_state["recalls"] = jnp.where(stop_now, state["recalls"], new_recalls)
+        new_state["recall_mask"] = jnp.where(stop_now, state["recall_mask"], new_recall_mask)
+        new_state["step"] = jnp.where(stop_now, state["step"], state["step"] + 1)
+        return new_state
+
+    final = jax.lax.while_loop(cond_fn, body_fn, init_state)
+    return final["recalls"], final["recall_mask"]
+
+
+@_functools.partial(__import__("jax").jit, static_argnames=("W", "max_recalls"))
+def _simulate_recalls_jax_jitted(hp_arr, W: int, key, max_recalls: int):
+    hp = _array_to_hp_cz(hp_arr)
+    return _simulate_recalls_jax_impl(hp, W, key, max_recalls)
+
+
+def simulate_recalls_jax(
+    hp: CoreHyperparams, W: int, key, *, max_recalls: int | None = None,
+):
+    """JIT-cached single-list CZ simulator. Returns (recalls_padded, mask)."""
+    if max_recalls is None:
+        max_recalls = 3 * W
+    return _simulate_recalls_jax_jitted(_hp_to_array_cz(hp), W, key, max_recalls)
+
+
+@_functools.partial(__import__("jax").jit, static_argnames=("W", "max_recalls"))
+def _simulate_recalls_jax_batch_jitted(hp_arr, W: int, keys_batch, max_recalls: int):
+    import jax
+    def one(key):
+        hp = _array_to_hp_cz(hp_arr)
+        return _simulate_recalls_jax_impl(hp, W, key, max_recalls)
+    return jax.vmap(one)(keys_batch)
+
+
+def simulate_recalls_jax_batch(
+    hp: CoreHyperparams, W: int, keys_batch, *, max_recalls: int | None = None,
+):
+    """Batched JAX simulator: keys_batch shape (N, 2). Returns (out, mask)."""
+    if max_recalls is None:
+        max_recalls = 3 * W
+    return _simulate_recalls_jax_batch_jitted(
+        _hp_to_array_cz(hp), W, keys_batch, max_recalls,
+    )
