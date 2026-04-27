@@ -1476,3 +1476,66 @@ storyline-init route (τ) and HCMR's two-phase retrieval can resolve
 this." Both DO, by construction — though τ-route was not heavily
 recruited in the trial-LL MS-TCM fit (τ=0.24 after route-β stopping
 was added).
+
+### Iteration 5g: hybrid trial-LL + curve-matching objective
+
+**Decision (2026-04-27)**: pure trial-LL fits don't reward matching
+the SPC/pFR/lag-CRP curves — the optimizer's only lever is per-recall
+LL. With ~4800 recall events vs 480 first-recalls, pFR primacy is
+under-weighted. Switch to a hybrid objective:
+
+```
+loss = NLL + λ · [w_spc·MSE(SPC) + w_pfr·MSE(pFR) + w_crp·MSE(lag_CRP)]
+```
+
+Defaults: `λ=50000`, `w_spc=w_pfr=w_crp=1.0`, `n_draws=3` synthetic
+datasets per loss eval. Curves are aggregate across the dataset (not
+per-participant), to match figure-style reporting.
+
+**Implementation** (`code/scripts/fit_hybrid.py`, NEW):
+- One unified script handling `--model={cz,mstcm,cmr}` so all three
+  use the SAME optimizer (scipy L-BFGS-B with finite-diff `eps=0.05`),
+  same n_restarts, same seed, same observed curves.
+- NLL: closed-form trial-LL (JAX-grad for cz/cmr, numpy for mstcm).
+- Curve sim: numpy simulators (`simulate_recalls`,
+  `simulate_recalls_mstcm`, `simulate_recalls_cmr`) over `n_draws`
+  synthetic datasets, then `compute_curves` from `analyses.{spc, pfr,
+  lag_crp}`.
+- Curve penalty: weighted sum of MSE on (SPC, pFR, lag-CRP).
+
+**Results** (FRFR-category, n_restarts=3, seed=42, λ=50000):
+
+| Model    | NLL       | curve_pen | total loss | wall time |
+|-|-|-|-|-|
+| HCMR     | 10755.22  | 0.0067    | 11090.5   | 24 min   |
+| MS-TCM   | 11259.30  | 0.0076    | 11640.6   | 90 min   |
+| Polyn CMR| 11294.43  | 0.0085    | 11717.9   | 31 min   |
+
+MS-TCM hybrid MLE:
+- τ = **0.73** (vs. 0.24 in pure trial-LL!) — route β strongly used
+- λ = 0.50 (storyline reinstatement at half strength)
+- w_global = 0.06 (very strict per-storyline retrieval)
+- k = 2.75, ε_d = 2.29
+
+The hybrid objective forced MS-TCM into a regime where the storyline-
+init route fires often, recovering the pFR primacy that was missing
+under pure trial-LL.
+
+CMR hybrid MLE: φ_s = 1.66 (still below Polyn 2009's 5.39). The
+optimizer regressed away from the strong-primacy initialization
+because, although strong φ helps SPC primacy, it produces
+extreme recency in pFR (sp 16 → 0.6+ vs observed 0.17), which the
+curve penalty also cares about. Single-phase CMR's structural limits
+remain.
+
+**Figure outcome**: regenerated `fig_analyses.pdf` shows MS-TCM (blue)
+now captures pFR sp 1 primacy in late lists (≈0.25, matching data ~0.27),
+while HCMR (red) and CMR (green) remain flat. SPC bowed shape matched
+by all three; lag-CRP contiguity peak captured by all three.
+
+**Take-home**: under the same fitting process, MS-TCM has the best
+**qualitative** fit (captures pFR primacy that HCMR/CMR miss), even
+though HCMR has the best **quantitative** trial-LL. The storyline-
+init mechanism (τ-route) is the source of MS-TCM's pFR primacy
+capture — a distinct mechanism not available in HCMR or single-phase
+CMR.

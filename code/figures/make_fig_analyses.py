@@ -128,10 +128,16 @@ def _load_cmr_fitted_params(
     fit_path: Path | None = None,
 ) -> tuple[ModelParameters, str, float | None] | None:
     if fit_path is None:
-        # Prefer trial-LL fit, fall back to curve fit.
+        # Prefer hybrid (Iteration 5g), then trial-LL, then curve-RMSE.
+        hybrid_path = Path("data/processed/fits/cmr_hybrid_frfr/fit_summary.json")
         ll_path = Path("data/processed/fits/cmr_frfr/fit_summary.json")
         curve_path = Path("data/processed/fits/cmr_curves_frfr/fit_summary.json")
-        fit_path = ll_path if ll_path.exists() else curve_path
+        if hybrid_path.exists():
+            fit_path = hybrid_path
+        elif ll_path.exists():
+            fit_path = ll_path
+        else:
+            fit_path = curve_path
     """Load Polyn 2009 standard CMR MLE parameters; return None if missing."""
     if not fit_path.exists():
         return None
@@ -350,12 +356,15 @@ def main() -> int:
     if args.use_table_1:
         params, label, ll = CZ_TABLE_1, "C&Z 2025 (Table 1)", None
     else:
-        # Prefer the trial-LL fit (Option 1: same trial-LL process for
-        # all three models — see arch log Iteration 5d). Fall back to
-        # the curve-RMSE fit, then to whatever path was passed.
+        # Prefer the hybrid fit (trial-LL + curve penalty, Iteration 5g).
+        # Fall back to pure trial-LL, then curve-RMSE, then whatever path
+        # was passed via --fit-path.
+        cz_hybrid_path = Path("data/processed/fits/cz_hybrid_frfr/fit_summary.json")
         cz_ll_path = Path("data/processed/fits/cz_frfr/fit_summary.json")
         cz_curve_path = Path("data/processed/fits/cz_curves_frfr/fit_summary.json")
-        if cz_ll_path.exists():
+        if cz_hybrid_path.exists():
+            params, label, ll = _load_fitted_params(cz_hybrid_path)
+        elif cz_ll_path.exists():
             params, label, ll = _load_fitted_params(cz_ll_path)
         elif cz_curve_path.exists():
             params, label, ll = _load_fitted_params(cz_curve_path)
@@ -372,16 +381,17 @@ def main() -> int:
         )
         print(f"  {name} = {val:.4f}")
 
-    # Try to load MS-TCM fit too. Prefer the trial-LL fit (Option 1:
-    # same trial-LL process for all three models — see arch log
-    # Iteration 5d). Fall back to the curve-RMSE fit if missing.
+    # Prefer the hybrid fit (Iteration 5g), fall back to trial-LL,
+    # then curve-RMSE.
+    mstcm_hybrid_path = Path("data/processed/fits/mstcm_hybrid_frfr/fit_summary.json")
     mstcm_curve_path = Path("data/processed/fits/mstcm_curves_frfr/fit_summary.json")
     mstcm_ll_path = Path("data/processed/fits/mstcm_frfr/fit_summary.json")
-    mstcm_loaded = (
-        _load_mstcm_fitted_params(mstcm_ll_path)
-        if mstcm_ll_path.exists()
-        else _load_mstcm_fitted_params(mstcm_curve_path)
-    )
+    if mstcm_hybrid_path.exists():
+        mstcm_loaded = _load_mstcm_fitted_params(mstcm_hybrid_path)
+    elif mstcm_ll_path.exists():
+        mstcm_loaded = _load_mstcm_fitted_params(mstcm_ll_path)
+    else:
+        mstcm_loaded = _load_mstcm_fitted_params(mstcm_curve_path)
     if mstcm_loaded is not None:
         params_mstcm, label_mstcm, ll_mstcm = mstcm_loaded
         print(f"\nUsing MS-TCM parameters: {label_mstcm}")

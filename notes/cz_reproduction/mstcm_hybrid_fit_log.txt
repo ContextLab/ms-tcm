@@ -1,0 +1,8 @@
+# Hybrid fit (mstcm) to frfr_category (λ=50000.0, n_draws=3, n_restarts=3, seed=42)
+loss at init = 13195.2608 (NLL=11701.1066, curve_pen=0.029883)
+restart 0: loss0=13195.2608  loss*=12578.3408  NLL*=11722.5924  cp*=0.017115  iters=4  elapsed=819.3s
+restart 1: loss0=16206.2125  loss*=12075.5943  NLL*=11603.4149  cp*=0.009441  iters=21  elapsed=2971.1s
+restart 2: loss0=14016.9124  loss*=11640.6426  NLL*=11259.2988  cp*=0.007627  iters=13  elapsed=1623.4s
+best: loss=11640.6426  restart=2  total=5432.8s
+
+Final: NLL=11259.2988  curve_pen=0.007627  λ·cp=381.3438
