@@ -1111,3 +1111,91 @@ pFR. Behavior matches Polyn 2009 Fig 3.
 - cmr (numpy): in progress, output buffered until first restart line
 
 Final numbers + fig_analyses regeneration to follow.
+
+### Iteration 5 results (2026-04-26 evening)
+
+All three curve-matching fits completed:
+
+| Model            | Best RMSE | Restarts | Wall time | n params |
+|-|-|-|-|-|
+| Polyn 2009 CMR   | **0.0524** | 3 | 78 min  | 7 |
+| MS-TCM (JAX)     | 0.0611    | 3 | 14.5 min | 11 |
+| C&Z 2025 (HCMR)  | 0.0631    | 3 | 55 min  | 7 |
+
+**Surprising**: standard CMR (with primacy gradient φ_s/φ_d) wins on
+RMSE — capturing the FRFR-category curves better than either
+hierarchical model. With one fewer parameter than MS-TCM, this is also
+better on AIC.
+
+**MS-TCM curve-fit parameters (RMSE 0.061)**:
+- β_enc = 0.696, β_enc_global = 0.700, β_list = 0.170
+- γ_fc = 0.435, k = 0.802, β_rec = 0.307, ε_d = 0.747, β_rein = 0.226
+- λ = 0.495, **τ = 0.817**, w_global = 0.148
+
+τ near 1 means MS-TCM is using route β (storyline-mediated) ~82% of
+the time. λ at 0.5 means storyline reinstatement is partial.
+w_global ≈ 0.15 means within-storyline retrieval is mostly per-storyline
+(strict hierarchy).
+
+### Open issue: JAX MS-TCM under-fits the late-list curves
+
+User-flagged on inspecting the regenerated figure:
+- pFR doesn't capture primacy or strong recency
+- lag-CRP: early lists aren't steep enough; late lists show **no**
+  contiguity effect at all
+- SPC: early lists look good (scallop shape captured); but the LATE
+  list SPC has no recency
+
+Earlier iterations on the numpy code (Iterations 3-4) DID show clearer
+curves. Two candidate explanations:
+
+1. **JAX vs numpy implementation drift**: although the distribution
+   match test (`/tmp/verify_jax_distrib.py`) showed agreement within
+   MC noise (max SPC diff 0.020 over N=5000), the MC test was at one
+   parameter setting. There may be a parameter regime where the two
+   simulators diverge that the optimizer then exploits.
+2. **Curve-matching objective difference**: trial-LL fits weighted
+   first-recall transitions and per-transition lag-CRP heavily. The
+   curve-match RMSE puts equal weight on SPC, pFR, and lag-CRP feature
+   vectors, which could move the MLE to a regime that fits scalloped-
+   SPC well at the cost of recency.
+
+**Next**: rerun a parallel numpy curve-fit to disentangle these. If
+numpy and JAX produce different best parameters under the same
+objective, it's an implementation bug. If both produce the same
+under-fitting curves, the issue is the objective.
+
+### Diagnostic (2026-04-26): JAX-vs-numpy parity confirmed at MS-TCM MLE
+
+`/tmp/diag_jax_vs_numpy.py`: at the MS-TCM curve-fit MLE
+(τ=0.82, λ=0.50, w_global=0.15, k=0.80, ε_d=0.75), simulated 2400 lists
+under both implementations using the actual FRFR-category list/category
+structure.
+
+Result: max |SPC diff| = 0.030, max |pFR diff| = 0.015. Both within
+the Monte-Carlo noise floor (≈0.03 SE × 3 = 0.03 for N=2400). JAX and
+numpy agree on the MLE simulation. **No JAX bug.**
+
+→ The under-fitting reflects either the curve-RMSE objective or the
+fundamental MS-TCM model limits at these parameters. Notable MLE
+features that explain the curves:
+
+- **k = 0.80** is unusually low (C&Z baseline k = 6.5). At low k, the
+  softmax is near-uniform — recall is nearly random across remaining
+  items. This destroys the lag-CRP contiguity signal AND the recency
+  bias of pFR.
+- **ε_d = 0.75** is aggressive stopping. Combined with low k, the
+  model recalls about 6 items mostly at random.
+
+The curve-RMSE optimizer pushed toward this flat regime because:
+- SPC: it's easier to match the observed mean SPC by being mediocre at
+  every position than by being good at primacy+recency.
+- pFR: similarly, low concentration at sp16 reduces recency.
+- lag-CRP: low k flattens the contiguity peak — but the observed
+  contiguity is also weak in the "random" half of FRFR-category, so
+  this hurts the loss less than expected.
+
+**Action**: weight the curve features to amplify positions where
+the model is currently underfit (sp 1, 14-16 for SPC; ±1 for lag-CRP).
+Or: reintroduce the trial-LL fit's k regularization (k_lower_bound) so
+the optimizer can't escape into k≈0.

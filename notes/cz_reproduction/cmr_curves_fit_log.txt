@@ -1,0 +1,15 @@
+# Curve-matching fit (cmr) to frfr_category (n_draws=5, n_restarts=3, seed=42)
+RMSE at init = 0.225353
+restart 0: rmse0=0.225353  rmse*=0.052420  converged=True  iters=14  elapsed=1583.9s
+restart 1: rmse0=0.321010  rmse*=0.075998  converged=True  iters=7  elapsed=916.9s
+restart 2: rmse0=0.236915  rmse*=0.053774  converged=False  iters=12  elapsed=2171.5s
+best: rmse=0.052420  restart=0  total fit time=4678.9s
+
+MLE parameters (curve-matching):
+  beta_enc = 0.6915
+  beta_rec = 0.7199
+  gamma_fc = 0.4280
+  k = 2.3177
+  epsilon_d = 3.0171
+  phi_s = 2.8696
+  phi_d = 0.6217

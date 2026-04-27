@@ -519,32 +519,27 @@ def main() -> int:
         ax = axes[row_idx, 0]
         m_o, lo_o, hi_o = obs["pfr"]
         ax.plot(positions, m_o, "o-", color=obs_color,
-                label="observed (mean ± 95% CI)",
+                label="Observed",
                 markersize=3.5, linewidth=1.0)
         ax.fill_between(positions, lo_o, hi_o,
                         color=obs_color, alpha=0.15, linewidth=0)
         if band_cmr is not None:
             m, lo, hi = band_cmr["pfr"]
             ax.plot(positions, m, ":", color=cmr_color,
-                    label=label_cmr, linewidth=1.0)
+                    label="CMR", linewidth=1.0)
             ax.fill_between(positions, lo, hi, color=cmr_color, alpha=0.15)
         m, lo, hi = band_cz["pfr"]
         ax.plot(positions, m, "--", color=cz_color,
-                label=label, linewidth=1.0)
+                label="HCMR", linewidth=1.0)
         ax.fill_between(positions, lo, hi, color=cz_color, alpha=0.2)
         if band_mstcm is not None:
             m, lo, hi = band_mstcm["pfr"]
             ax.plot(positions, m, "--", color=mstcm_color,
-                    label=label_mstcm, linewidth=1.0)
+                    label="MS-TCM", linewidth=1.0)
             ax.fill_between(positions, lo, hi,
                             color=mstcm_color, alpha=0.2)
-        ax.set_xlabel("serial position")
-        ax.set_ylabel("P(first recall)")
-        ax.set_title(
-            f"{panel_letters[row_idx][0]}. {row_info['half_label']}: "
-            f"probability of first recall",
-            fontsize=10,
-        )
+        ax.set_xlabel("Serial position")
+        ax.set_ylabel("p(First recall)")
         if is_top_row:
             ax.legend(fontsize=8, loc="best")
 
@@ -589,13 +584,8 @@ def main() -> int:
                             color=mstcm_color, alpha=0.2)
 
         ax.axvline(0, color="#bbb", linewidth=0.5, linestyle=":")
-        ax.set_xlabel("lag")
-        ax.set_ylabel("conditional response probability")
-        ax.set_title(
-            f"{panel_letters[row_idx][1]}. {row_info['half_label']}: "
-            f"lag-CRP",
-            fontsize=10,
-        )
+        ax.set_xlabel("Lag")
+        ax.set_ylabel("Conditional response probability")
 
         # --- Column 2: SPC ---
         ax = axes[row_idx, 2]
@@ -615,13 +605,19 @@ def main() -> int:
             m, lo, hi = band_mstcm["spc"]
             ax.plot(positions, m, "--", color=mstcm_color, linewidth=1.0)
             ax.fill_between(positions, lo, hi, color=mstcm_color, alpha=0.2)
-        ax.set_xlabel("serial position")
-        ax.set_ylabel("P(recall)")
-        ax.set_title(
-            f"{panel_letters[row_idx][2]}. {row_info['half_label']}: "
-            f"serial-position curve",
-            fontsize=10,
-        )
+        ax.set_xlabel("Serial position")
+        ax.set_ylabel("p(Recall)")
+
+        # --- Panel letters in upper-left of every axis. ---
+        # Use axes-fraction coords so the label sits inside the panel
+        # regardless of data range. Larger + semibold per spec.
+        for col_idx in range(3):
+            axes[row_idx, col_idx].text(
+                0.02, 0.97, panel_letters[row_idx][col_idx],
+                transform=axes[row_idx, col_idx].transAxes,
+                fontsize=14, fontweight="semibold",
+                va="top", ha="left",
+            )
 
     fig.tight_layout()
     fig.savefig(out, bbox_inches="tight", transparent=True)
