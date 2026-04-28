@@ -1539,3 +1539,212 @@ though HCMR has the best **quantitative** trial-LL. The storyline-
 init mechanism (τ-route) is the source of MS-TCM's pFR primacy
 capture — a distinct mechanism not available in HCMR or single-phase
 CMR.
+
+### Iteration 5g status review (2026-04-27 evening)
+
+User-flagged issues with the current hybrid figure:
+
+**pFR**:
+- CMR and HCMR look reasonable.
+- MS-TCM: good on EARLY lists but **over-weights** category effects
+  (visible "scallop" shape on pFR). On LATE lists, MS-TCM
+  **over-predicts primacy** at sp 1 and **under-predicts recency** at
+  sp 16.
+
+**lag-CRP**:
+- Early lists: all three good.
+- Late lists: MS-TCM lag-CRP **far too flat** — under-predicts
+  temporal clustering. With τ=0.73, route β dominates and produces
+  weak temporal contiguity (storyline transitions break the lag-1
+  signal).
+
+**SPC**:
+- HCMR: good.
+- CMR: anti-primacy artifact (sp 1 < sp 2, etc.) — known limitation
+  of single-phase CMR for category-organized data.
+- MS-TCM: captures scallop on EARLY lists. On LATE lists,
+  **over-predicts middle items** and under-predicts both primacy and
+  recency.
+
+**Diagnosis**: the MS-TCM hybrid landed in a regime that's optimized
+for pFR/SPC mean shape but at the cost of lag-CRP and recency. Three
+hypotheses:
+
+1. **The curve weights are wrong** — equal weighting on pFR/SPC/CRP
+   is not appropriate. MS-TCM's mass in route β over-fits category
+   structure.
+2. **Aggregate-curve fitting masks per-participant variance** —
+   different participants may use different strategies, but the
+   single MLE is forced to compromise. Per-participant curve fitting
+   could help.
+3. **Insufficient iterations** — MS-TCM only ran 4 iters (restart 0)
+   + 21 iters (restart 1) + 13 iters (restart 2) due to the slow
+   numpy LL + finite-diff path. With more iterations + better
+   warm-start initialization, the optimizer might find a different
+   regime.
+
+**Plan**:
+1. **Profile + optimize runtime first** — port MS-TCM trial-LL to
+   JAX so finite-diff isn't needed (analytic gradients), and the
+   per-loss eval drops from ~6s to <1s. This unlocks faster iteration
+   cycles on the loss design.
+2. **Vary curve weights** — try `w_pfr=0.5, w_crp=2.0` to weight
+   lag-CRP more.
+3. **Per-participant curves** (not yet tried) — fit one parameter
+   set that minimizes sum-over-participants of curve MSE per
+   participant, instead of MSE on the aggregate curve. This better
+   reflects the heterogeneity in the data.
+
+### Iteration 5h: runtime profiling + optimization (in progress)
+
+**Current bottleneck profile** (per loss eval, on FRFR-category):
+
+| Model | LL eval | curve sim | Total per loss | Per gradient |
+|-|-|-|-|-|
+| HCMR | 0.05s (JAX-jit) | ~3s (numpy sim) | ~3s | ~50s (FD over 7 dim) |
+| CMR | 0.05s (JAX-jit) | ~3s | ~3s | ~50s |
+| MS-TCM | ~3s (numpy LL!) | ~3s | ~6s | ~150s (FD over 11 dim) |
+
+The bottleneck for MS-TCM is the **numpy LL** (no JAX path). Each
+gradient step requires 22 finite-diff evals × 6s ≈ 130s.
+
+For HCMR/CMR: the **numpy curve simulator** is the bottleneck (LL is
+already JAX-jitted with analytic gradient). If we port the simulator
+to JAX with vmap (we already have this for MS-TCM!), we can get curve
+sim down from 3s to ~0.3s, dropping per-loss eval to ~0.4s.
+
+**Plan**: port the curve simulators to JAX (CMR, CZ already need a
+JAX simulator written; MS-TCM has one). This unlocks fast iteration
+on objective design.
+
+### Iteration 5h: JAX simulators + per-participant curves (2026-04-27)
+
+**Speed wins**:
+
+JAX-batched simulators added for CZ (`simulate_recalls_jax_batch` in
+`_likelihood_core.py`) and CMR (`simulate_recalls_cmr_jax_batch` in
+`_likelihood_core_cmr.py`). Both verified to match numpy
+counterparts within Monte-Carlo noise (max |SPC diff| ≈ 0.02).
+
+Per-loss-eval cost in `fit_hybrid.py` (FRFR-category, n_draws=3):
+
+| Model | Before | After |
+|-|-|-|
+| CZ    | 1.6s   | 85ms (~18×) |
+| CMR   | 1.3s   | 52ms (~25×) |
+| MS-TCM| 3.0s   | 750ms (~4×; LL bound) |
+
+5-iter smoke fits go from ~3-17 minutes to 3-55 seconds across the
+three models.
+
+MS-TCM is now **numpy-LL bound** (577 ms vs JAX's 2-33 ms for CMR/CZ).
+Porting MS-TCM trial-LL to JAX is non-trivial because route β has
+data-dependent visit parsing; deferred. multiprocessing.Pool over
+lists hung in testing — not pursued.
+
+**Per-participant curve fitting**:
+
+Added `--per-participant` flag to `fit_hybrid.py`. Computes the curve
+penalty as the mean-over-participants of weighted curve MSE (each
+participant has their own observed SPC/pFR/lag-CRP from their 16
+lists, and the model's per-participant curves are aggregated from
+n_draws × 16 simulated lists). This is a soft random-effects
+formulation: same θ for everyone, but the loss rewards fits that
+match individual participants' curves rather than only the dataset
+average.
+
+**Results comparison** (all 3 models, FRFR-category, n_draws=3 agg /
+n_draws=5 pp, n_restarts=3, seed=42, λ=50000):
+
+| Variant            | NLL       | cp     |
+|-|-|-|
+| CMR aggregate      | 11294.43  | 0.0085 |
+| CMR per-participant| 11388.67  | 0.0478 |
+| CZ aggregate       | 10755.22  | 0.0067 |
+| CZ per-participant | 10737.75  | 0.0469 |
+| MS-TCM aggregate   | 11259.30  | 0.0076 |
+| MS-TCM per-pp      | 11231.44  | 0.0502 |
+| MS-TCM agg w_crp=3 | 11269.26  | 0.0118 |
+
+Per-participant curve penalty is structurally larger (each ppt's
+curves are noisy; the model can't average over participants to
+smooth). The interesting signal is what HAPPENS to the parameters
+under per-participant fitting:
+
+- **CMR pp: φ_s=2.68 (vs aggregate's 1.66)** — much stronger primacy.
+  The aggregate-curve optimizer was averaging out individual-ppt
+  primacy; per-participant fitting recovers it. SPC sp1: 0.625 →
+  **0.757** (matches observed 0.75).
+- CZ pp: nearly same as aggregate (already in good regime).
+- MS-TCM pp: τ=0.51 (vs 0.73), w_global=0.004 (vs 0.06). Slightly
+  different regime; within-storyline retrieval is now strict.
+
+**Figure (regenerated with per-participant fits)**:
+
+Improvements:
+- CMR's reverse primacy (sp 1 < sp 2) is GONE; SPC now bowed.
+- HCMR SPC primacy clearly visible.
+
+Remaining issues (user-flagged 2026-04-27 evening, MS-TCM specific):
+- **pFR**: primacy too weak (early + late lists); scalloping too
+  strong on early lists; primacy too "long" on late lists.
+- **lag-CRP**: under-estimated (both halves), but qualitative
+  ordering is right (early > late).
+- **SPC**: scallop on early lists captured well, BUT primacy + recency
+  not captured at all; on late lists the SPC is FLAT instead of U-
+  shaped — totally misses the canonical primacy + recency pattern.
+
+**Next steps planned**:
+
+1. Go back to the drawing board on MS-TCM. Specifically:
+   - Why does MS-TCM under-predict recency on late lists? Hypothesis:
+     route β with τ ≈ 0.5 destroys recency because route-β recall
+     order is dominated by storyline transitions, not recency.
+   - Why too-flat SPC on late lists? Same root cause: when the model
+     spends too much time in route β, the within-storyline recalls
+     average out the primacy + recency signal.
+   - Possible model fixes: add a separate recency-only route within
+     route β; or add an additional pFR-init mechanism that biases the
+     first recall toward sp 1 directly (rather than via storyline
+     selection).
+
+2. Expand evaluation beyond FRFR-category — pull in other datasets
+   from `https://github.com/ContextLab/FRFR-analyses` (FRFR datasets
+   with different structure: random ordering, semantic clustering,
+   etc.) to test which patterns each model can/cannot capture across
+   datasets. May reveal that the current MS-TCM regime is FRFR-
+   category-specific and breaks on others.
+
+3. The hybrid optimizer's mismatch between trial-LL and curve-MSE
+   pushes the model into compromise regimes that capture neither well.
+   May need a different objective design (e.g., explicit per-curve
+   moment matching with separate weights per moment).
+
+**Performance/iteration notes**:
+
+- CMR/CZ hybrid fits now complete in <2 min (60-100s). MS-TCM hybrid
+  needs ~25-90 min depending on parameters (numpy LL is the
+  bottleneck). This is fast enough for productive iteration on
+  weights / objectives, but porting MS-TCM LL to JAX is the next
+  unlock for truly rapid iteration.
+- All fits stored under
+  `data/processed/fits/{model}_hybrid{,_v2,_pp}_frfr/fit_summary.json`
+  with model, NLL, curve_penalty, MLE parameters, theta_mle.
+
+**Status (2026-04-27 evening, end of session)**:
+
+The framework supports flexible exploration of the hybrid objective
+(weights, per-participant) and rapid iteration via JAX simulators.
+The MS-TCM model itself, however, does not capture the canonical
+free-recall phenomena well on FRFR-category under any objective
+weighting we've tried, suggesting a more fundamental model revision
+is needed — particularly around how the model's recall mechanism
+balances category-driven (route β) vs recency-driven (route α) recall.
+
+Iteration goals for next session:
+1. Diagnose MS-TCM's specific failure modes on each phenomenon
+   (which architectural component is responsible for each issue?).
+2. Expand to additional FRFR datasets to constrain the model better.
+3. Consider model architecture revisions targeting the failed
+   phenomena: pFR primacy mechanism, recency preservation in route β,
+   primacy-driven mid-list-recall mechanism.

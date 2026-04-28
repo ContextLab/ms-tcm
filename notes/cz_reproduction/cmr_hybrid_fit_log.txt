@@ -1,8 +1,8 @@
-# Hybrid fit (cmr) to frfr_category (λ=50000.0, n_draws=3, n_restarts=3, seed=42)
-loss at init = 22168.3316 (NLL=14981.5805, curve_pen=0.143735)
-restart 0: loss0=22168.3316  loss*=11731.7956  NLL*=11324.9161  cp*=0.008138  iters=17  elapsed=734.9s
-restart 1: loss0=32804.6778  loss*=11717.8535  NLL*=11294.4306  cp*=0.008468  iters=13  elapsed=420.7s
-restart 2: loss0=25478.3228  loss*=11771.0924  NLL*=11411.2370  cp*=0.007196  iters=9  elapsed=716.9s
-best: loss=11717.8535  restart=1  total=1882.5s
+# Hybrid fit (cmr) to frfr_category (λ=50000.0, n_draws=5, n_restarts=3, seed=42)
+loss at init = 24102.1180 (NLL=14981.5805, curve_pen=0.182411)
+restart 0: loss0=24102.1180  loss*=13969.0763  NLL*=11460.0904  cp*=0.050180  iters=4  elapsed=22.7s
+restart 1: loss0=34712.3188  loss*=13776.9133  NLL*=11388.6728  cp*=0.047765  iters=18  elapsed=52.4s
+restart 2: loss0=27625.3743  loss*=13799.0592  NLL*=11367.0073  cp*=0.048641  iters=13  elapsed=29.1s
+best: loss=13776.9133  restart=1  total=104.9s
 
-Final: NLL=11294.4306  curve_pen=0.008468  λ·cp=423.4229
+Final: NLL=11388.6728  curve_pen=0.047765  λ·cp=2388.2405

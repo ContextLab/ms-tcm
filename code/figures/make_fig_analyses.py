@@ -128,11 +128,15 @@ def _load_cmr_fitted_params(
     fit_path: Path | None = None,
 ) -> tuple[ModelParameters, str, float | None] | None:
     if fit_path is None:
-        # Prefer hybrid (Iteration 5g), then trial-LL, then curve-RMSE.
+        # Prefer per-participant hybrid (Iteration 5h), then aggregate
+        # hybrid, then trial-LL, then curve-RMSE.
+        pp_path = Path("data/processed/fits/cmr_hybrid_pp_frfr/fit_summary.json")
         hybrid_path = Path("data/processed/fits/cmr_hybrid_frfr/fit_summary.json")
         ll_path = Path("data/processed/fits/cmr_frfr/fit_summary.json")
         curve_path = Path("data/processed/fits/cmr_curves_frfr/fit_summary.json")
-        if hybrid_path.exists():
+        if pp_path.exists():
+            fit_path = pp_path
+        elif hybrid_path.exists():
             fit_path = hybrid_path
         elif ll_path.exists():
             fit_path = ll_path
@@ -356,13 +360,16 @@ def main() -> int:
     if args.use_table_1:
         params, label, ll = CZ_TABLE_1, "C&Z 2025 (Table 1)", None
     else:
-        # Prefer the hybrid fit (trial-LL + curve penalty, Iteration 5g).
-        # Fall back to pure trial-LL, then curve-RMSE, then whatever path
-        # was passed via --fit-path.
+        # Prefer the per-participant hybrid fit (trial-LL +
+        # per-participant curve penalty, Iteration 5h). Then aggregate
+        # hybrid, then pure trial-LL, then curve-RMSE.
+        cz_pp_path = Path("data/processed/fits/cz_hybrid_pp_frfr/fit_summary.json")
         cz_hybrid_path = Path("data/processed/fits/cz_hybrid_frfr/fit_summary.json")
         cz_ll_path = Path("data/processed/fits/cz_frfr/fit_summary.json")
         cz_curve_path = Path("data/processed/fits/cz_curves_frfr/fit_summary.json")
-        if cz_hybrid_path.exists():
+        if cz_pp_path.exists():
+            params, label, ll = _load_fitted_params(cz_pp_path)
+        elif cz_hybrid_path.exists():
             params, label, ll = _load_fitted_params(cz_hybrid_path)
         elif cz_ll_path.exists():
             params, label, ll = _load_fitted_params(cz_ll_path)
@@ -381,12 +388,15 @@ def main() -> int:
         )
         print(f"  {name} = {val:.4f}")
 
-    # Prefer the hybrid fit (Iteration 5g), fall back to trial-LL,
-    # then curve-RMSE.
+    # Prefer the per-participant hybrid fit (Iteration 5h), then
+    # aggregate hybrid (5g), then trial-LL, then curve-RMSE.
+    mstcm_pp_path = Path("data/processed/fits/mstcm_hybrid_pp_frfr/fit_summary.json")
     mstcm_hybrid_path = Path("data/processed/fits/mstcm_hybrid_frfr/fit_summary.json")
     mstcm_curve_path = Path("data/processed/fits/mstcm_curves_frfr/fit_summary.json")
     mstcm_ll_path = Path("data/processed/fits/mstcm_frfr/fit_summary.json")
-    if mstcm_hybrid_path.exists():
+    if mstcm_pp_path.exists():
+        mstcm_loaded = _load_mstcm_fitted_params(mstcm_pp_path)
+    elif mstcm_hybrid_path.exists():
         mstcm_loaded = _load_mstcm_fitted_params(mstcm_hybrid_path)
     elif mstcm_ll_path.exists():
         mstcm_loaded = _load_mstcm_fitted_params(mstcm_ll_path)
